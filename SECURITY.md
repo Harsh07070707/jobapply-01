@@ -20,7 +20,7 @@ JobApply is in active early development. Security fixes are applied to the
 **Please do not open a public GitHub issue for security problems.**
 
 Instead, report vulnerabilities privately via GitHub's
-[security advisory form](https://github.com/arun2728/jobapply/security/advisories/new).
+[security advisory form](https://github.com/romit-23/jobapply/security/advisories/new).
 
 When reporting, please include:
 
