@@ -19,6 +19,8 @@ interface Props {
   /** ``true`` while the parent's mutation is in flight; we show a
    *  spinner and disable the form so users can't double-submit. */
   pending?: boolean;
+  /** Request errors stay in the dialog so the user can fix options and retry. */
+  error?: string;
   /** Optional copy override — e.g. "Re-tailor" when the job has
    *  already been processed once. */
   title?: string;
@@ -43,6 +45,7 @@ export default function TailorModal({
   onClose,
   onConfirm,
   pending,
+  error,
   title,
   jobTitle,
   jobCount,
@@ -201,6 +204,15 @@ export default function TailorModal({
             </label>
           ) : null}
         </div>
+
+        {error ? (
+          <p
+            role="alert"
+            className="rounded-md border border-rose-800/50 bg-rose-950/30 p-3 text-sm text-rose-200"
+          >
+            {error}
+          </p>
+        ) : null}
 
         <div className="flex justify-end gap-2 pt-1">
           <button

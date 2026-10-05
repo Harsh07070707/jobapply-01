@@ -60,7 +60,7 @@ export default function JobCard({ job, selected, onToggle }: Props) {
             className="mt-1 h-4 w-4 accent-brand-500"
             checked={!!selected}
             onChange={(e) => onToggle(e.target.checked)}
-            aria-label="Select for batch run"
+            aria-label={`Select ${job.title || "Untitled role"}${job.company ? ` at ${job.company}` : ""} for tailoring`}
           />
         ) : null}
         <div className="min-w-0 flex-1">

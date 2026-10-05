@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Jobs dashboard sorting by fit or title, visible-result batch selection,
+  status counts, and controls to clear filters and selection.
+- Retry feedback for failed job loading and inline batch tailoring errors.
 - Product Hunt launch kit, marketing assets, and a VHS tape script for the
   terminal demo (`assets/`).
 - `CODE_OF_CONDUCT.md`, `SECURITY.md`, GitHub issue templates, and a pull
