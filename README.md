@@ -10,11 +10,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/arun2728/jobapply/actions/workflows/ci.yml"><img src="https://github.com/arun2728/jobapply/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/arun2728/jobapply/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+  <a href="https://github.com/romit-23/jobapply/actions/workflows/ci.yml"><img src="https://github.com/romit-23/jobapply/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/romit-23/jobapply/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python 3.11+"></a>
-  <a href="https://github.com/arun2728/jobapply/stargazers"><img src="https://img.shields.io/github/stars/arun2728/jobapply?style=social" alt="Stars"></a>
-  <a href="https://github.com/arun2728/jobapply/issues"><img src="https://img.shields.io/github/issues/arun2728/jobapply" alt="Issues"></a>
+  <a href="https://github.com/romit-23/jobapply/stargazers"><img src="https://img.shields.io/github/stars/romit-23/jobapply?style=social" alt="Stars"></a>
+  <a href="https://github.com/romit-23/jobapply/issues"><img src="https://img.shields.io/github/issues/romit-23/jobapply" alt="Issues"></a>
 </p>
 
 <p align="center">
@@ -642,7 +642,7 @@ output/tailor-<timestamp>/<slug>/
 
 ## Roadmap
 
-Things on the table — open a [Discussion](https://github.com/arun2728/jobapply/discussions) or upvote an issue to nudge any of them forward.
+Things on the table — open a [Discussion](https://github.com/romit-23/jobapply/discussions) or upvote an issue to nudge any of them forward.
 
 - [ ] DOCX export (alongside Markdown + PDF)
 - [ ] Locale-specific templates (EU CV, JP rirekisho, indented academic CV)
@@ -655,9 +655,9 @@ Things on the table — open a [Discussion](https://github.com/arun2728/jobapply
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Good first issues are tagged
-[`good first issue`](https://github.com/arun2728/jobapply/labels/good%20first%20issue),
+[`good first issue`](https://github.com/romit-23/jobapply/labels/good%20first%20issue),
 and substantive feature work lives under
-[`help wanted`](https://github.com/arun2728/jobapply/labels/help%20wanted).
+[`help wanted`](https://github.com/romit-23/jobapply/labels/help%20wanted).
 
 By participating in this project you agree to abide by our
 [Code of Conduct](CODE_OF_CONDUCT.md). To report a security issue, see
@@ -675,8 +675,8 @@ By participating in this project you agree to abide by our
 
 <!-- ## Star history
 
-<a href="https://www.star-history.com/#arun2728/jobapply&Date">
-  <img src="https://api.star-history.com/svg?repos=arun2728/jobapply&type=Date" alt="Star history" width="80%" />
+<a href="https://www.star-history.com/#romit-23/jobapply&Date">
+  <img src="https://api.star-history.com/svg?repos=romit-23/jobapply&type=Date" alt="Star history" width="80%" />
 </a> -->
 
 ## License
@@ -690,5 +690,5 @@ MIT — see [LICENSE](LICENSE). Your `profile.json` content remains yours.
   <br/>
   <em>Built with care for everyone who's tired of pasting the same resume into 47 forms.</em>
   <br/>
-  If JobApply saved you an afternoon, please <a href="https://github.com/arun2728/jobapply">⭐ the repo</a>.
+  If JobApply saved you an afternoon, please <a href="https://github.com/romit-23/jobapply">⭐ the repo</a>.
 </p>

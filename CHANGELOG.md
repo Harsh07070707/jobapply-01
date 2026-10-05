@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README hero image, gallery screenshots, and badges.
 
 ### Changed
+- Project badges, package metadata, and issue template links now point to
+  `romit-23/jobapply`.
 - Tightened `.gitignore` so personal artifacts (`Profile_Updated.md`,
   `LinkedInProfile*`, `*-test.pdf`, etc.) cannot be accidentally committed.
 

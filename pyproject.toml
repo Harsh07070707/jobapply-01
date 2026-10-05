@@ -62,9 +62,9 @@ dev = [
 jobapply = "jobapply.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/arun2728/jobs-search-and-apply-api"
-Repository = "https://github.com/arun2728/jobs-search-and-apply-api"
-Issues = "https://github.com/arun2728/jobs-search-and-apply-api/issues"
+Homepage = "https://github.com/romit-23/jobapply"
+Repository = "https://github.com/romit-23/jobapply"
+Issues = "https://github.com/romit-23/jobapply/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["jobapply"]
