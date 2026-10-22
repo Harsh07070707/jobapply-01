@@ -690,5 +690,5 @@ MIT — see [LICENSE](LICENSE). Your `profile.json` content remains yours.
   <br/>
   <em>Built with care for everyone who's tired of pasting the same resume into 47 forms.</em>
   <br/>
-  If JobApply saved you an afternoon, please <a href="https://github.com/romit-23/jobapply">⭐ the repo</a>.
+  If JobApply saved you an afternoon, please <a href="[https://github.com/romit-23/jobapply](https://github.com/Harsh07070707/jobapply-01.git)">⭐ the repo</a>.
 </p>
