@@ -18,6 +18,11 @@ output/
 .env
 jobapply.toml
 
+# --- Alembic / migrations ---
+# Never commit a generated migration that references local paths or secrets.
+# The versions/ directory itself IS committed; only generated SQL dumps are not.
+alembic_output/
+
 # --- Profile + run artifacts (personal data — never commit) ---
 profile.md
 profile.json

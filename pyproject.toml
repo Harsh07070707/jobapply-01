@@ -46,6 +46,14 @@ dependencies = [
   "fpdf2>=2.7.0",
   "fastapi>=0.115.0",
   "uvicorn[standard]>=0.30.0",
+  # --- platform additions (multi-user, auth, migrations) ---
+  "alembic>=1.13.0",
+  "psycopg[binary]>=3.1.0",           # PostgreSQL async driver (psycopg3)
+  "passlib[bcrypt]>=1.7.4",           # password hashing
+  "python-jose[cryptography]>=3.3.0", # JWT signing / verification
+  "slowapi>=0.1.9",                   # FastAPI rate limiting
+  "pydantic[email]>=2.7",             # EmailStr validation
+  "python-multipart>=0.0.9",          # file upload form parsing
 ]
 
 [project.optional-dependencies]
