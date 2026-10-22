@@ -680,8 +680,8 @@ def _register_routes(app: FastAPI) -> None:
                 summary = " ".join(sum_m.group(1).split())[:500]
 
             # Experience - extract basic structure
-            from jobapply.models import ExperienceRole
-            experience_roles: list[ExperienceRole] = []
+            from jobapply.profile import ProfileExperience
+            experience_roles: list[ProfileExperience] = []
             exp_section = re.search(
                 r"(?:experience|employment|work history)[^\n]*\n(.*?)(?:(?:projects?|education|certifications?|technical skills?)[^\n]*\n|\Z)",
                 raw_text, re.IGNORECASE | re.DOTALL
@@ -697,17 +697,18 @@ def _register_routes(app: FastAPI) -> None:
                         role = lines[1] if len(lines) > 1 else "Role"
                         bullets = [l for l in lines[2:] if l.startswith(("•", "-", "–")) or l[0].isupper()][:8]
                         if company and len(company) < 100:
-                            experience_roles.append(ExperienceRole(
+                            experience_roles.append(ProfileExperience(
                                 company=company,
                                 role=role,
-                                dates="",
                                 location="",
+                                start_date="",
+                                end_date="",
                                 bullets=bullets or ["Details available in original resume"]
                             ))
 
             # Education - extract basic structure
-            from jobapply.models import EducationItem
-            education_items: list[EducationItem] = []
+            from jobapply.profile import ProfileEducation
+            education_items: list[ProfileEducation] = []
             edu_section = re.search(
                 r"(?:education)[^\n]*\n(.*?)(?:(?:experience|projects?|certifications?|technical skills?)[^\n]*\n|\Z)",
                 raw_text, re.IGNORECASE | re.DOTALL
@@ -720,19 +721,20 @@ def _register_routes(app: FastAPI) -> None:
                 if degrees:
                     # Find school name (usually first line or before degree)
                     lines = [l.strip() for l in edu_text.split("\n") if l.strip()]
-                    school = lines[0] if lines else "University"
-                    degree = degrees[0] if degrees else "Degree"
-                    education_items.append(EducationItem(
-                        institution=school,
-                        degree=degree,
-                        dates="",
+                    school_name = lines[0] if lines else "University"
+                    degree_str = degrees[0] if degrees else "Degree"
+                    education_items.append(ProfileEducation(
+                        school=school_name,
+                        degree=degree_str,
                         location="",
+                        start_date="",
+                        end_date="",
                         gpa="",
-                        coursework="",
-                        details=""
+                        coursework=[],
                     ))
 
             # Build profile
+            from jobapply.profile import ProfileProject
             profile_obj = Profile(
                 name=name,
                 email=email,
@@ -742,7 +744,7 @@ def _register_routes(app: FastAPI) -> None:
                 summary=summary,
                 skills=skills,
                 experience=experience_roles,
-                projects=[],
+                projects=[],  # Empty list of ProfileProject
                 education=education_items,
             )
 
