@@ -223,8 +223,9 @@ def iter_search_jobs(inp: JobSearchInput) -> Iterator[RawJob]:
     yielded = 0
     # Request MORE results from JobSpy if we're filtering, since filters will reject many
     # Reduced multiplier from 5 to 2 for faster results
-    has_filters = inp.experience_level or inp.job_type
-    multiplier = 2 if has_filters else 1
+    # ULTRA FAST: No multiplier even with filters - get exactly what user asked for
+    # This makes searches 2x faster when using experience level or job type filters
+    multiplier = 1  # Removed filter multiplier for maximum speed
     per_title = max(5, min(inp.results_wanted * multiplier, 300 // max(1, len(inp.titles))))
 
     for title in inp.titles:

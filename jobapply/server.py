@@ -592,177 +592,187 @@ def _register_routes(app: FastAPI) -> None:
         """Upload PDF/DOCX/TXT resume → extract text → write profile.json directly.
         No LLM needed — parses the file locally and builds profile from the text.
         """
-        import tempfile, shutil, re
-        from jobapply.profile_import import extract_text_from_resume, ResumeImportError
-        from jobapply.profile import save_profile, Profile
-        from jobapply.resume_template import extract_template_from_text, save_template_to_profile
-
-        ctx: ServerContext = request.app.state.ctx
-        cfg = ctx.cfg
-
-        form = await request.form()
-        file = form.get("resume")
-        if file is None or not getattr(file, "filename", None):
-            raise HTTPException(status_code=400, detail="No resume file received.")
-
-        filename = file.filename.lower()
-        if not any(filename.endswith(x) for x in (".pdf", ".docx", ".txt", ".md")):
-            raise HTTPException(status_code=400, detail="Only PDF, DOCX, TXT, and MD files are supported.")
-
-        suffix = "." + file.filename.rsplit(".", 1)[-1].lower()
-        tmp_path = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                shutil.copyfileobj(file.file, tmp)
-                tmp_path = Path(tmp.name)
+            import tempfile, shutil, re
+            from jobapply.profile_import import extract_text_from_resume, ResumeImportError
+            from jobapply.profile import save_profile, Profile
+            from jobapply.resume_template import extract_template_from_text, save_template_to_profile
 
+            ctx: ServerContext = request.app.state.ctx
+            cfg = ctx.cfg
+
+            form = await request.form()
+            file = form.get("resume")
+            if file is None or not getattr(file, "filename", None):
+                raise HTTPException(status_code=400, detail="No resume file received.")
+
+            filename = file.filename.lower()
+            if not any(filename.endswith(x) for x in (".pdf", ".docx", ".txt", ".md")):
+                raise HTTPException(status_code=400, detail="Only PDF, DOCX, TXT, and MD files are supported.")
+
+            suffix = "." + file.filename.rsplit(".", 1)[-1].lower()
+            tmp_path = None
             try:
-                raw_text = extract_text_from_resume(tmp_path)
-            except ResumeImportError as exc:
-                raise HTTPException(status_code=422, detail=str(exc))
-        finally:
-            if tmp_path:
-                tmp_path.unlink(missing_ok=True)
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                    shutil.copyfileobj(file.file, tmp)
+                    tmp_path = Path(tmp.name)
 
-        if not raw_text.strip():
-            raise HTTPException(status_code=422, detail="Could not extract text. Is it a scanned image PDF?")
+                try:
+                    raw_text = extract_text_from_resume(tmp_path)
+                except ResumeImportError as exc:
+                    raise HTTPException(status_code=422, detail=str(exc))
+            finally:
+                if tmp_path:
+                    tmp_path.unlink(missing_ok=True)
 
-        # Extract resume template for format preservation
-        try:
-            template = extract_template_from_text(raw_text)
-        except Exception:
-            template = None  # Graceful fallback if template extraction fails
+            if not raw_text.strip():
+                raise HTTPException(status_code=422, detail="Could not extract text. Is it a scanned image PDF?")
 
-        # ── Simple regex-based profile builder (no LLM, no rate limits) ──
-        lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+            # Extract resume template for format preservation
+            try:
+                template = extract_template_from_text(raw_text)
+            except Exception:
+                template = None  # Graceful fallback if template extraction fails
 
-        # Name = first non-empty line
-        name = lines[0] if lines else "Unknown"
+            # ── Simple regex-based profile builder (no LLM, no rate limits) ──
+            lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
 
-        # Email
-        email_m = re.search(r"[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}", raw_text)
-        email = email_m.group(0) if email_m else ""
+            # Name = first non-empty line
+            name = lines[0] if lines else "Unknown"
 
-        # Phone
-        phone_m = re.search(r"(\+?\d[\d\s\-().]{7,}\d)", raw_text)
-        phone = phone_m.group(0).strip() if phone_m else ""
+            # Email
+            email_m = re.search(r"[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}", raw_text)
+            email = email_m.group(0) if email_m else ""
 
-        # LinkedIn
-        li_m = re.search(r"linkedin\.com/in/[\w\-]+", raw_text)
-        linkedin = "https://" + li_m.group(0) if li_m else ""
+            # Phone
+            phone_m = re.search(r"(\+?\d[\d\s\-().]{7,}\d)", raw_text)
+            phone = phone_m.group(0).strip() if phone_m else ""
 
-        # GitHub
-        gh_m = re.search(r"github\.com/[\w\-]+", raw_text)
-        github = "https://" + gh_m.group(0) if gh_m else ""
+            # LinkedIn
+            li_m = re.search(r"linkedin\.com/in/[\w\-]+", raw_text)
+            linkedin = "https://" + li_m.group(0) if li_m else ""
 
-        # Skills — look for skills section
-        skills: list[str] = []
-        skill_section = re.search(
-            r"(?:technical\s+skills?|skills?|technologies)[^\n]*\n(.*?)(?:\n\n|\Z)",
-            raw_text, re.IGNORECASE | re.DOTALL
-        )
-        if skill_section:
-            raw_skills = skill_section.group(1)
-            for chunk in re.split(r"[,|•\n]+", raw_skills):
-                chunk = re.sub(r"\s+", " ", chunk).strip()
-                if 2 < len(chunk) < 60 and not chunk.startswith("http"):
-                    skills.append(chunk)
-            skills = list(dict.fromkeys(skills))[:40]
+            # GitHub
+            gh_m = re.search(r"github\.com/[\w\-]+", raw_text)
+            github = "https://" + gh_m.group(0) if gh_m else ""
 
-        # Summary
-        summary = ""
-        sum_m = re.search(
-            r"(?:summary|objective|profile)[^\n]*\n(.*?)(?:\n\n|\Z)",
-            raw_text, re.IGNORECASE | re.DOTALL
-        )
-        if sum_m:
-            summary = " ".join(sum_m.group(1).split())[:500]
+            # Skills — look for skills section
+            skills: list[str] = []
+            skill_section = re.search(
+                r"(?:technical\s+skills?|skills?|technologies)[^\n]*\n(.*?)(?:\n\n|\Z)",
+                raw_text, re.IGNORECASE | re.DOTALL
+            )
+            if skill_section:
+                raw_skills = skill_section.group(1)
+                for chunk in re.split(r"[,|•\n]+", raw_skills):
+                    chunk = re.sub(r"\s+", " ", chunk).strip()
+                    if 2 < len(chunk) < 60 and not chunk.startswith("http"):
+                        skills.append(chunk)
+                skills = list(dict.fromkeys(skills))[:40]
 
-        # Experience - extract basic structure
-        from jobapply.models import ExperienceRole
-        experience_roles: list[ExperienceRole] = []
-        exp_section = re.search(
-            r"(?:experience|employment|work history)[^\n]*\n(.*?)(?:(?:projects?|education|certifications?|technical skills?)[^\n]*\n|\Z)",
-            raw_text, re.IGNORECASE | re.DOTALL
-        )
-        if exp_section:
-            exp_text = exp_section.group(1)
-            # Split by company/role patterns (company name followed by dates)
-            role_blocks = re.split(r"\n(?=[A-Z][^\n]{10,80}(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{4}))", exp_text)
-            for block in role_blocks[:5]:  # Limit to 5 most recent roles
-                lines = [l.strip() for l in block.split("\n") if l.strip()]
-                if len(lines) >= 2:
-                    company = lines[0].split("\t")[0].strip()
-                    role = lines[1] if len(lines) > 1 else "Role"
-                    bullets = [l for l in lines[2:] if l.startswith(("•", "-", "–")) or l[0].isupper()][:8]
-                    if company and len(company) < 100:
-                        experience_roles.append(ExperienceRole(
-                            company=company,
-                            role=role,
-                            dates="",
-                            location="",
-                            bullets=bullets or ["Details available in original resume"]
-                        ))
+            # Summary
+            summary = ""
+            sum_m = re.search(
+                r"(?:summary|objective|profile)[^\n]*\n(.*?)(?:\n\n|\Z)",
+                raw_text, re.IGNORECASE | re.DOTALL
+            )
+            if sum_m:
+                summary = " ".join(sum_m.group(1).split())[:500]
 
-        # Education - extract basic structure
-        from jobapply.models import EducationItem
-        education_items: list[EducationItem] = []
-        edu_section = re.search(
-            r"(?:education)[^\n]*\n(.*?)(?:(?:experience|projects?|certifications?|technical skills?)[^\n]*\n|\Z)",
-            raw_text, re.IGNORECASE | re.DOTALL
-        )
-        if edu_section:
-            edu_text = edu_section.group(1)
-            # Look for degree patterns
-            degree_pattern = r"(B\.?Tech|M\.?Tech|B\.?S\.?|M\.?S\.?|PhD|Bachelor|Master)[^\n]{0,100}"
-            degrees = re.findall(degree_pattern, edu_text, re.IGNORECASE)
-            if degrees:
-                # Find school name (usually first line or before degree)
-                lines = [l.strip() for l in edu_text.split("\n") if l.strip()]
-                school = lines[0] if lines else "University"
-                degree = degrees[0] if degrees else "Degree"
-                education_items.append(EducationItem(
-                    institution=school,
-                    degree=degree,
-                    dates="",
-                    location="",
-                    gpa="",
-                    coursework="",
-                    details=""
-                ))
+            # Experience - extract basic structure
+            from jobapply.models import ExperienceRole
+            experience_roles: list[ExperienceRole] = []
+            exp_section = re.search(
+                r"(?:experience|employment|work history)[^\n]*\n(.*?)(?:(?:projects?|education|certifications?|technical skills?)[^\n]*\n|\Z)",
+                raw_text, re.IGNORECASE | re.DOTALL
+            )
+            if exp_section:
+                exp_text = exp_section.group(1)
+                # Split by company/role patterns (company name followed by dates)
+                role_blocks = re.split(r"\n(?=[A-Z][^\n]{10,80}(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{4}))", exp_text)
+                for block in role_blocks[:5]:  # Limit to 5 most recent roles
+                    lines = [l.strip() for l in block.split("\n") if l.strip()]
+                    if len(lines) >= 2:
+                        company = lines[0].split("\t")[0].strip()
+                        role = lines[1] if len(lines) > 1 else "Role"
+                        bullets = [l for l in lines[2:] if l.startswith(("•", "-", "–")) or l[0].isupper()][:8]
+                        if company and len(company) < 100:
+                            experience_roles.append(ExperienceRole(
+                                company=company,
+                                role=role,
+                                dates="",
+                                location="",
+                                bullets=bullets or ["Details available in original resume"]
+                            ))
 
-        # Build profile
-        profile_obj = Profile(
-            name=name,
-            email=email,
-            phone=phone,
-            linkedin=linkedin,
-            github=github,
-            summary=summary,
-            skills=skills,
-            experience=experience_roles,
-            projects=[],
-            education=education_items,
-        )
+            # Education - extract basic structure
+            from jobapply.models import EducationItem
+            education_items: list[EducationItem] = []
+            edu_section = re.search(
+                r"(?:education)[^\n]*\n(.*?)(?:(?:experience|projects?|certifications?|technical skills?)[^\n]*\n|\Z)",
+                raw_text, re.IGNORECASE | re.DOTALL
+            )
+            if edu_section:
+                edu_text = edu_section.group(1)
+                # Look for degree patterns
+                degree_pattern = r"(B\.?Tech|M\.?Tech|B\.?S\.?|M\.?S\.?|PhD|Bachelor|Master)[^\n]{0,100}"
+                degrees = re.findall(degree_pattern, edu_text, re.IGNORECASE)
+                if degrees:
+                    # Find school name (usually first line or before degree)
+                    lines = [l.strip() for l in edu_text.split("\n") if l.strip()]
+                    school = lines[0] if lines else "University"
+                    degree = degrees[0] if degrees else "Degree"
+                    education_items.append(EducationItem(
+                        institution=school,
+                        degree=degree,
+                        dates="",
+                        location="",
+                        gpa="",
+                        coursework="",
+                        details=""
+                    ))
 
-        profile_path = ctx.cwd / (cfg.profile_path or "profile.json")
-        try:
-            save_profile(profile_obj, profile_path)
-            # Save extracted template for format preservation
-            if template:
-                save_template_to_profile(template, profile_path)
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500, detail=f"Could not write profile.json: {exc}")
+            # Build profile
+            profile_obj = Profile(
+                name=name,
+                email=email,
+                phone=phone,
+                linkedin=linkedin,
+                github=github,
+                summary=summary,
+                skills=skills,
+                experience=experience_roles,
+                projects=[],
+                education=education_items,
+            )
 
-        return {
-            "status": "ok",
-            "profile_name": profile_obj.name,
-            "skills_count": len(profile_obj.skills),
-            "experience_count": len(profile_obj.experience),
-            "education_count": len(profile_obj.education),
-            "path": str(profile_path),
-            "note": "Profile created from resume. Experience and education extracted. Edit profile.json to refine details.",
-        }
+            profile_path = ctx.cwd / (cfg.profile_path or "profile.json")
+            try:
+                save_profile(profile_obj, profile_path)
+                # Save extracted template for format preservation
+                if template:
+                    save_template_to_profile(template, profile_path)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=500, detail=f"Could not write profile.json: {exc}")
+
+            return {
+                "status": "ok",
+                "profile_name": profile_obj.name,
+                "skills_count": len(profile_obj.skills),
+                "experience_count": len(profile_obj.experience),
+                "education_count": len(profile_obj.education),
+                "path": str(profile_path),
+                "note": "Profile created from resume. Experience and education extracted. Edit profile.json to refine details.",
+            }
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions as-is
+        except Exception as e:
+            # Catch ANY other exception and return as JSON
+            import traceback
+            error_detail = f"{type(e).__name__}: {str(e)}"
+            print(f"[ERROR] Profile upload failed: {error_detail}")
+            print(traceback.format_exc())
+            raise HTTPException(status_code=500, detail=error_detail)
 
     @app.delete("/api/profile")
     def delete_profile(request: Request) -> dict[str, str]:

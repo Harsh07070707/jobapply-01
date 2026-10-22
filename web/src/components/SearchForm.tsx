@@ -320,9 +320,12 @@ export default function SearchForm({ onTaskStarted }: Props) {
           <input type="checkbox" checked={remote} onChange={(e) => setRemote(e.target.checked)} className="accent-brand-500" />
           Remote-friendly only
         </label>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={linkedin} onChange={(e) => setLinkedin(e.target.checked)} className="accent-brand-500" />
-          Fetch LinkedIn descriptions (much slower)
+        <label className="flex items-center gap-2 text-amber-500 dark:text-amber-400">
+          <input type="checkbox" checked={linkedin} onChange={(e) => setLinkedin(e.target.checked)} className="accent-amber-500" />
+          <span className="flex items-center gap-1">
+            Fetch LinkedIn descriptions 
+            <span className="text-xs">(⚠️ 5-10x slower - uses browser automation)</span>
+          </span>
         </label>
         <label className="flex items-center gap-2 text-slate-400">
           <input type="checkbox" checked={score} onChange={(e) => setScore(e.target.checked)} className="accent-brand-500" />
