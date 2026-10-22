@@ -107,6 +107,8 @@ export interface JobRecord {
   processed_at?: string | null;
   available_artifacts?: Record<string, string | null>;
   job_dir_relative?: string;
+  has_referral?: boolean;
+  referral_message?: string | null;
 }
 
 export interface JobsListResponse {
@@ -121,6 +123,11 @@ export interface ServerStatus {
   profile_path: string | null;
   profile_loaded: boolean;
   profile_name: string;
+  profile_email?: string | null;
+  profile_phone?: string | null;
+  profile_skills?: string[];
+  profile_linkedin?: string | null;
+  profile_github?: string | null;
   provider: string;
   model: string;
   sites: string[];

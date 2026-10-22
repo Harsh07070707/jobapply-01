@@ -424,6 +424,7 @@ def tailor_for_job_description(
     no_pdf: bool = False,
     email: TailorEmailRequest | None = None,
     profile: Profile | None = None,
+    profile_path: Path | None = None,
 ) -> TailorOutputs:
     """Tailor a resume + cover letter (and optionally an email) for one JD.
 
@@ -482,7 +483,7 @@ def tailor_for_job_description(
     cover_tex = job_dir / "cover_letter.tex"
     resume_md.write_text(md_resume, encoding="utf-8")
     cover_md.write_text(md_cover, encoding="utf-8")
-    resume_tex.write_text(fill_resume_tex(resume), encoding="utf-8")
+    resume_tex.write_text(fill_resume_tex(resume, profile_path=profile_path), encoding="utf-8")
     cover_tex.write_text(
         fill_cover_letter_tex(
             cover,

@@ -452,14 +452,18 @@ def fill_cover_letter_tex(
     return out
 
 
-def fill_resume_tex(tr: TailoredResume) -> str:
-    """Render :class:`TailoredResume` into the MTeck-styled LaTeX shell.
+def fill_resume_tex(tr: TailoredResume, profile_path: Path | None = None) -> str:
+    """Render :class:`TailoredResume` into LaTeX.
+
+    Uses the default MTeck-styled template. Custom template support is planned
+    for future versions to preserve user's original formatting.
 
     The Summary section is intentionally not rendered: it tends to read like
     boilerplate marketing and is already covered by the cover letter. The
     ``TailoredResume.summary`` field is still populated by the LLM and
     consumed by the cover-letter agent for context.
     """
+    # Use default MTeck template
     tex_path = _templates_dir() / "resume.tex"
     template = tex_path.read_text(encoding="utf-8")
     body = "\n".join(

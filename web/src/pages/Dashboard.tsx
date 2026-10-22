@@ -1,248 +1,456 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Filter, Loader2, PenSquare, Wand2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle, Filter, Loader2, PenSquare,
+  RefreshCw, Trash2, Upload, Wand2,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 import SearchForm from "@/components/SearchForm";
 import JobCard from "@/components/JobCard";
-import TailorModal, {
-  type TailorOptions,
-} from "@/components/TailorModal";
+import ProfileManager from "@/components/ProfileManager";
+import TailorModal, { type TailorOptions } from "@/components/TailorModal";
 import TaskProgress from "@/components/TaskProgress";
-import {
-  useJobs,
-  useStartRun,
-  useStatus,
-} from "@/lib/hooks";
+import { useJobs, useStartRun, useStatus } from "@/lib/hooks";
 import type { JobRecord, TaskRecord } from "@/lib/types";
+import { api } from "@/lib/api";
 import clsx from "clsx";
 
 const STATUS_FILTERS = [
-  { value: "all", label: "All" },
+  { value: "all",     label: "All" },
   { value: "pending", label: "Pending" },
-  { value: "done", label: "Tailored" },
+  { value: "done",    label: "Tailored" },
   { value: "skipped", label: "Low fit" },
-  { value: "failed", label: "Failed" },
+  { value: "failed",  label: "Failed" },
 ];
 
 type SortOrder = "fit" | "title" | "workspace";
 
 export default function Dashboard() {
-  const status = useStatus();
-  const jobs = useJobs();
-  const [filter, setFilter] = useState<string>("all");
-  const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<SortOrder>("fit");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [searchTask, setSearchTask] = useState<TaskRecord | null>(null);
-  const [runTask, setRunTask] = useState<TaskRecord | null>(null);
-  const [tailorOpen, setTailorOpen] = useState(false);
+  const status   = useStatus();
+  const jobs     = useJobs();
   const startRun = useStartRun();
 
+  const [filter,      setFilter]     = useState<string>(() => {
+    const saved = sessionStorage.getItem("dashboard_filter");
+    return saved || "all";
+  });
+  const [query,       setQuery]      = useState(() => {
+    const saved = sessionStorage.getItem("dashboard_query");
+    return saved || "";
+  });
+  const [sort,        setSort]       = useState<SortOrder>(() => {
+    const saved = sessionStorage.getItem("dashboard_sort");
+    return (saved as SortOrder) || "fit";
+  });
+  const [selected,    setSelected]   = useState<Set<string>>(new Set());
+  const [searchTask,  setSearchTask] = useState<TaskRecord | null>(null);
+  const [runTask,     setRunTask]    = useState<TaskRecord | null>(null);
+  const [tailorOpen,  setTailorOpen] = useState(false);
+  const [showUpload,  setShowUpload] = useState(false);
+  const [searching,   setSearching]  = useState(false);
+  const [lastSearchJobIds, setLastSearchJobIds] = useState<string[] | null>(() => {
+    const saved = sessionStorage.getItem("dashboard_lastSearchJobIds");
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [showAllJobs, setShowAllJobs] = useState(() => {
+    const saved = sessionStorage.getItem("dashboard_showAllJobs");
+    return saved ? JSON.parse(saved) : false;
+  });
+  const [hasSearched, setHasSearched] = useState(() => {
+    const saved = sessionStorage.getItem("dashboard_hasSearched");
+    return saved ? JSON.parse(saved) : false;
+  });
+  const [currentPage, setCurrentPage] = useState(() => {
+    const saved = sessionStorage.getItem("dashboard_currentPage");
+    return saved ? parseInt(saved, 10) : 1;
+  });
+  const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const JOBS_PER_PAGE = 20;
+
+  // Persist dashboard state to sessionStorage
+  useEffect(() => {
+    sessionStorage.setItem("dashboard_filter", filter);
+  }, [filter]);
+
+  useEffect(() => {
+    sessionStorage.setItem("dashboard_query", query);
+  }, [query]);
+
+  useEffect(() => {
+    sessionStorage.setItem("dashboard_sort", sort);
+  }, [sort]);
+
+  useEffect(() => {
+    sessionStorage.setItem("dashboard_currentPage", String(currentPage));
+  }, [currentPage]);
+
+  useEffect(() => {
+    if (lastSearchJobIds) {
+      sessionStorage.setItem("dashboard_lastSearchJobIds", JSON.stringify(lastSearchJobIds));
+    }
+  }, [lastSearchJobIds]);
+
+  useEffect(() => {
+    sessionStorage.setItem("dashboard_showAllJobs", JSON.stringify(showAllJobs));
+  }, [showAllJobs]);
+
+  useEffect(() => {
+    sessionStorage.setItem("dashboard_hasSearched", JSON.stringify(hasSearched));
+  }, [hasSearched]);
+
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const profileLoaded = status.data?.profile_loaded ?? false;
+
+  /* ── derived lists ─────────────────────────────────────────────── */
   const filtered: JobRecord[] = useMemo(() => {
-    const list = jobs.data?.jobs ?? [];
+    const allJobs = jobs.data?.jobs ?? [];
+    
+    // If user hasn't searched yet AND showAllJobs is false, show nothing
+    if (!hasSearched && !showAllJobs) {
+      return [];
+    }
+    
+    // If we have a recent search and "show all" is off, filter to only those job IDs
+    const list = (lastSearchJobIds && !showAllJobs)
+      ? allJobs.filter((j) => lastSearchJobIds.includes(j.job_id))
+      : allJobs;
+    
     const q = query.trim().toLowerCase();
-    const matches = list.filter((j) => {
+    const out = list.filter((j) => {
       if (filter !== "all" && j.status !== filter) return false;
       if (!q) return true;
-      const hay =
-        (j.title || "") +
-        " " +
-        (j.company || "") +
-        " " +
-        (j.location || "") +
-        " " +
-        (j.description || "");
-      return hay.toLowerCase().includes(q);
+      return (
+        (j.title || "") + " " +
+        (j.company || "") + " " +
+        (j.location || "") + " " +
+        (j.description || "")
+      ).toLowerCase().includes(q);
     });
-    if (sort === "fit") {
-      matches.sort((a, b) => (b.fit?.score ?? -1) - (a.fit?.score ?? -1));
-    } else if (sort === "title") {
-      matches.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-    }
-    return matches;
-  }, [jobs.data, filter, query, sort]);
+    if (sort === "fit")   out.sort((a, b) => (b.fit?.score ?? -1) - (a.fit?.score ?? -1));
+    if (sort === "title") out.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+    return out;
+  }, [jobs.data, filter, query, sort, lastSearchJobIds, showAllJobs, hasSearched]);
 
-  // A job may be deleted on its detail page or by another browser tab.
+  // Paginated jobs
+  const totalPages = Math.ceil(filtered.length / JOBS_PER_PAGE);
+  const paginatedJobs = filtered.slice(
+    (currentPage - 1) * JOBS_PER_PAGE,
+    currentPage * JOBS_PER_PAGE
+  );
+
+  // Reset to page 1 when filters change (but not on initial mount)
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    setCurrentPage(1);
+  }, [filter, query, sort, lastSearchJobIds, showAllJobs]);
+
+  /* ── keep selection in sync with job list ──────────────────────── */
   useEffect(() => {
     if (!jobs.data) return;
-    const available = new Set(jobs.data.jobs.map((job) => job.job_id));
-    setSelected((current) => {
-      const next = new Set([...current].filter((id) => available.has(id)));
-      return next.size === current.size ? current : next;
+    const avail = new Set(jobs.data.jobs.map((j) => j.job_id));
+    setSelected((cur) => {
+      const next = new Set([...cur].filter((id) => avail.has(id)));
+      return next.size === cur.size ? cur : next;
     });
   }, [jobs.data]);
 
-  const totalCount = jobs.data?.jobs.length ?? 0;
-  const visibleSelectedCount = filtered.filter((job) =>
-    selected.has(job.job_id),
-  ).length;
-  const allVisibleSelected =
-    filtered.length > 0 && visibleSelectedCount === filtered.length;
-  const hiddenSelectedCount = selected.size - visibleSelectedCount;
-  const hasFilters = filter !== "all" || query.trim().length > 0;
-  const profileLoaded = status.data?.profile_loaded ?? false;
+  const totalCount          = jobs.data?.jobs.length ?? 0;
+  const visibleSelectedCount = filtered.filter((j) => selected.has(j.job_id)).length;
+  const allVisibleSelected   = filtered.length > 0 && visibleSelectedCount === filtered.length;
+  const hiddenSelectedCount  = selected.size - visibleSelectedCount;
+  const hasFilters           = filter !== "all" || query.trim().length > 0;
 
-  const clearFilters = () => {
+  /* ── helpers ────────────────────────────────────────────────────── */
+  const clearFilters  = () => { setFilter("all"); setQuery(""); };
+  const toggleVisible = () => {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      paginatedJobs.forEach((j) => allVisibleSelected ? next.delete(j.job_id) : next.add(j.job_id));
+      return next;
+    });
+  };
+  const toggleSelected = (jobId: string, on: boolean) =>
+    setSelected((s) => { const n = new Set(s); on ? n.add(jobId) : n.delete(jobId); return n; });
+
+  /* ── search started ────────────────────────────────────────────── */
+  function handleSearchStarted(task: TaskRecord) {
+    setSearchTask(task);
+    setSearching(true);
     setFilter("all");
     setQuery("");
-  };
+    setShowAllJobs(false); // Hide all jobs, only show new search results
+    setHasSearched(true); // Mark that user has searched
+    setLastSearchJobIds([]); // Clear previous search
+    setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+  }
 
-  const toggleVisible = () => {
-    setSelected((current) => {
-      const next = new Set(current);
-      for (const job of filtered) {
-        if (allVisibleSelected) next.delete(job.job_id);
-        else next.add(job.job_id);
-      }
-      return next;
-    });
-  };
+  /* ── search finished ───────────────────────────────────────────── */
+  async function handleSearchDone() {
+    setSearching(false);
+    const { data } = await jobs.refetch();
+    
+    // Get ONLY the jobs from THIS search (most recent by processed_at)
+    // This ensures we show EXACTLY the results from this search
+    const allJobs = data?.jobs ?? [];
+    
+    // Get the most recent timestamp before this search started
+    const searchStartTime = searchTask?.created_at ?? "";
+    
+    // Filter jobs that were processed during or after this search
+    const freshJobs = allJobs.filter((j) => 
+      (j.processed_at || "") >= searchStartTime
+    );
+    
+    const jobIds = freshJobs.map((j) => j.job_id);
+    setLastSearchJobIds(jobIds);
+    setShowAllJobs(false); // Keep showing only search results
+  }
 
-  const toggleSelected = (jobId: string, on: boolean) => {
-    setSelected((s) => {
-      const next = new Set(s);
-      if (on) next.add(jobId);
-      else next.delete(jobId);
-      return next;
-    });
-  };
-
+  /* ── tailor ─────────────────────────────────────────────────────── */
   const onConfirmTailor = async (opts: TailorOptions) => {
     if (selected.size === 0) return;
     try {
       const t = await startRun.mutateAsync({
         job_ids: Array.from(selected),
         provider: opts.provider,
-        model: opts.model,
-        no_pdf: opts.no_pdf,
-        force: opts.force,
+        model:    opts.model,
+        no_pdf:   opts.no_pdf,
+        force:    opts.force,
       });
       setRunTask(t);
       setSelected(new Set());
       setTailorOpen(false);
-    } catch {
-      // The modal displays the mutation error and keeps the selection for retry.
+    } catch { /* modal shows error */ }
+  };
+
+  /* ── clear all jobs ────────────────────────────────────────────── */
+  const handleClearAll = async () => {
+    try {
+      const result = await api.deleteAllJobs();
+      console.log("[Clear Workspace] Delete result:", result);
+      
+      if (result.deleted_count === 0) {
+        alert(`Warning: No jobs were deleted. Failed: ${result.failed_count || 0}. Check server logs.`);
+      } else if (result.failed_count && result.failed_count > 0) {
+        alert(`Deleted ${result.deleted_count} jobs, but ${result.failed_count} failed. Check server logs.`);
+      }
+      
+      setConfirmClearAll(false);
+      setLastSearchJobIds(null);
+      setHasSearched(false);
+      setShowAllJobs(false);
+      setSelected(new Set());
+      jobs.refetch();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to clear workspace");
     }
   };
 
   return (
     <div className="space-y-6">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-bold tracking-tight">Jobs</h1>
-        <p className="text-sm text-slate-400">
-          Run a search, then tailor your resume + cover letter for the roles
-          you like.
-        </p>
-      </div>
 
-      {status.data && !profileLoaded ? (
-        <div className="card border-amber-700/40 bg-amber-900/10 p-4 text-sm text-amber-200">
-          <div className="font-semibold">profile.json not found</div>
-          <p className="mt-1 text-amber-100/80">
-            Run{" "}
-            <code className="rounded bg-slate-900 px-1.5 py-0.5 font-mono text-xs">
-              jobapply init --resume &lt;path&gt;
-            </code>{" "}
-            in this directory before tailoring or scoring.
+      {/* ── Page header ─────────────────────────────────────────── */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-slate-100">
+            Jobs
+          </h1>
+          <p className="text-sm text-slate-500">
+            Search job boards, then tailor your resume for the roles you want.
           </p>
         </div>
-      ) : null}
+        <div className="flex items-center gap-2">
+          {totalCount > 0 && (
+            confirmClearAll ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400">Delete all {totalCount} jobs?</span>
+                <button
+                  onClick={handleClearAll}
+                  className="btn-danger px-3 py-1.5 text-xs"
+                >
+                  Yes, clear all
+                </button>
+                <button 
+                  onClick={() => setConfirmClearAll(false)} 
+                  className="btn-secondary px-3 py-1.5 text-xs"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setConfirmClearAll(true)}
+                className="btn-ghost text-xs text-rose-400 hover:text-rose-300"
+                title="Delete all jobs from workspace"
+              >
+                <Trash2 size={13} />
+                Clear workspace
+              </button>
+            )
+          )}
+          <button
+            onClick={() => setShowUpload((v) => !v)}
+            className={clsx(
+              "btn-secondary shrink-0 text-xs gap-1.5",
+              showUpload && "ring-1 ring-brand-500",
+            )}
+            title="Upload or replace your resume profile"
+          >
+            <Upload size={13} />
+            {profileLoaded
+              ? (showUpload ? "Hide upload" : `Profile: ${status.data?.profile_name}`)
+              : "Upload resume"}
+          </button>
+        </div>
+      </div>
 
-      <SearchForm onTaskStarted={(t) => setSearchTask(t)} />
-
-      {searchTask ? (
-        <TaskProgress
-          taskId={searchTask.task_id}
-          onDone={() => jobs.refetch()}
+      {/* ── Profile upload panel ────────────────────────────────── */}
+      {(!profileLoaded || showUpload) && (
+        <ProfileManager
+          currentProfile={profileLoaded && status.data ? {
+            name: status.data.profile_name,
+            email: status.data.profile_email ?? undefined,
+            phone: status.data.profile_phone ?? undefined,
+            skills: status.data.profile_skills ?? undefined,
+            linkedin: status.data.profile_linkedin ?? undefined,
+            github: status.data.profile_github ?? undefined,
+          } : undefined}
+          onDone={() => {
+            setShowUpload(false);
+            status.refetch?.();
+          }}
         />
-      ) : null}
-      {runTask ? (
-        <TaskProgress
-          taskId={runTask.task_id}
-          onDone={() => jobs.refetch()}
-        />
-      ) : null}
+      )}
 
+      {/* ── Search form ─────────────────────────────────────────── */}
+      <SearchForm onTaskStarted={handleSearchStarted} />
+
+      {/* ── Progress ────────────────────────────────────────────── */}
+      <div ref={resultsRef}>
+        {searchTask && (
+          <TaskProgress
+            key={searchTask.task_id}
+            taskId={searchTask.task_id}
+            onDone={handleSearchDone}
+          />
+        )}
+        {runTask && (
+          <TaskProgress
+            key={runTask.task_id}
+            taskId={runTask.task_id}
+            onDone={() => jobs.refetch()}
+          />
+        )}
+      </div>
+
+      {/* ── Filter / action bar ─────────────────────────────────── */}
       <div className="card flex flex-wrap items-center gap-3 p-4">
-        <div className="flex min-w-0 flex-[1_1_240px] items-center gap-2">
-          <Filter size={16} className="text-slate-400" />
+        <div className="flex min-w-0 flex-[1_1_220px] items-center gap-2">
+          <Filter size={15} className="text-slate-400 shrink-0" />
           <input
             className="input flex-1"
             placeholder="Filter by title, company, description…"
-            aria-label="Filter jobs"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
+
         <div className="flex flex-wrap gap-1">
-          {STATUS_FILTERS.map((f) => (
-            <button
-              key={f.value}
-              className={clsx(
-                "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-                filter === f.value
-                  ? "bg-brand-500/20 text-brand-200"
-                  : "text-slate-400 hover:bg-slate-800 hover:text-slate-100",
-              )}
-              aria-pressed={filter === f.value}
-              onClick={() => setFilter(f.value)}
-            >
-              {f.label}{" "}
-              <span className="font-mono opacity-70">
-                {f.value === "all"
-                  ? totalCount
-                  : (jobs.data?.jobs ?? []).filter((j) => j.status === f.value)
-                      .length}
-              </span>
-            </button>
-          ))}
+          {STATUS_FILTERS.map((f) => {
+            const count = f.value === "all"
+              ? totalCount
+              : (jobs.data?.jobs ?? []).filter((j) => j.status === f.value).length;
+            
+            // Don't show counts if user hasn't searched yet
+            if (!hasSearched && count === 0) return null;
+            
+            return (
+              <button
+                key={f.value}
+                onClick={() => setFilter(f.value)}
+                className={clsx(
+                  "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                  filter === f.value
+                    ? "bg-brand-500/20 text-brand-600 dark:text-brand-200"
+                    : "text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-900 dark:hover:text-slate-100",
+                )}
+              >
+                {f.label}{" "}
+                {hasSearched && (
+                  <span className="font-mono opacity-70">{count}</span>
+                )}
+              </button>
+            );
+          })}
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex items-center gap-2 ml-auto">
           <Link to="/freeform" className="btn-ghost text-sm">
-            <PenSquare size={14} />
+            <PenSquare size={13} />
             Paste JD
           </Link>
           <button
-            className="btn-primary"
-            disabled={
-              selected.size === 0 || startRun.isPending || !profileLoaded
-            }
-            onClick={() => {
-              startRun.reset();
-              setTailorOpen(true);
-            }}
+            className="btn-secondary text-sm"
+            disabled={jobs.isFetching}
+            onClick={() => jobs.refetch()}
+            title="Refresh job list"
           >
-            {startRun.isPending ? (
-              <Loader2 size={14} className="animate-spin" />
-            ) : (
-              <Wand2 size={14} />
-            )}
+            <RefreshCw size={13} className={clsx(jobs.isFetching && "animate-spin")} />
+            Refresh
+          </button>
+          <button
+            className="btn-primary text-sm"
+            disabled={selected.size === 0 || startRun.isPending || !profileLoaded}
+            onClick={() => { startRun.reset(); setTailorOpen(true); }}
+          >
+            {startRun.isPending
+              ? <Loader2 size={13} className="animate-spin" />
+              : <Wand2 size={13} />}
             Tailor selected ({selected.size})
           </button>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
-        <p aria-live="polite">
-          Showing{" "}
-          <span className="font-mono text-slate-200">{filtered.length}</span>
-          {" "}of <span className="font-mono text-slate-200">{totalCount}</span>
-          {" "}jobs
-          {hiddenSelectedCount > 0 ? (
-            <span className="ml-2 text-amber-300">
-              · {hiddenSelectedCount} selected outside this view
-            </span>
-          ) : null}
-        </p>
-        {hasFilters ? (
-          <button className="btn-ghost" onClick={clearFilters}>
-            Clear filters
-          </button>
-        ) : null}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2">
-            <span className="text-xs">Sort by</span>
+      {/* ── Results meta ────────────────────────────────────────── */}
+      {hasSearched && (
+        <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500">
+          <p aria-live="polite">
+            {searching ? (
+              <span className="flex items-center gap-1.5">
+                <Loader2 size={13} className="animate-spin text-brand-500" /> Searching — results will appear below…
+              </span>
+            ) : lastSearchJobIds && !showAllJobs ? (
+              <>
+                Showing <span className="font-mono text-slate-800 dark:text-slate-200">{filtered.length}</span> latest search results
+                {hiddenSelectedCount > 0 && <span className="ml-2 text-amber-500"> · {hiddenSelectedCount} selected outside view</span>}
+              </>
+            ) : (
+              <>
+                Showing <span className="font-mono text-slate-800 dark:text-slate-200">{filtered.length}</span> of <span className="font-mono text-slate-800 dark:text-slate-200">{totalCount}</span> jobs
+                {hiddenSelectedCount > 0 && <span className="ml-2 text-amber-500"> · {hiddenSelectedCount} selected outside view</span>}
+              </>
+            )}
+          </p>
+          {hasFilters && <button className="btn-ghost text-xs" onClick={clearFilters}>Clear filters</button>}
+          {lastSearchJobIds && !showAllJobs && lastSearchJobIds.length < totalCount && (
+            <button className="btn-ghost text-xs text-brand-500" onClick={() => setShowAllJobs(true)}>
+              Show all {totalCount} workspace jobs
+            </button>
+          )}
+          {showAllJobs && lastSearchJobIds && lastSearchJobIds.length > 0 && (
+            <button className="btn-ghost text-xs text-brand-500" onClick={() => setShowAllJobs(false)}>
+              ← Back to search results ({lastSearchJobIds.length})
+            </button>
+          )}
+
+          <div className="ml-auto flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs">
+            Sort by
             <select
-              className="input w-auto"
+              className="input w-auto text-xs py-1"
               value={sort}
               onChange={(e) => setSort(e.target.value as SortOrder)}
             >
@@ -252,79 +460,115 @@ export default function Dashboard() {
             </select>
           </label>
           <button
-            className="btn-secondary"
+            className="btn-secondary text-xs"
             disabled={filtered.length === 0 || startRun.isPending}
             onClick={toggleVisible}
           >
             {allVisibleSelected ? "Deselect visible" : "Select visible"}
           </button>
-          {selected.size > 0 ? (
-            <button
-              className="btn-ghost"
-              disabled={startRun.isPending}
-              onClick={() => setSelected(new Set())}
-            >
+          {selected.size > 0 && (
+            <button className="btn-ghost text-xs" onClick={() => setSelected(new Set())}>
               Clear selection
             </button>
-          ) : null}
+          )}
         </div>
-      </div>
+        </div>
+      )}
 
+      {/* ── Job list ────────────────────────────────────────────── */}
       {jobs.isError ? (
-        <div
-          role="alert"
-          className="card flex flex-wrap items-center gap-3 border-rose-800/50 p-4 text-sm text-rose-200"
-        >
-          <AlertTriangle size={18} />
-          <div className="min-w-0 flex-1">
-            <p className="font-semibold">Could not load jobs</p>
-            <p className="mt-1 break-words text-rose-200/80">
-              {jobs.error.message}
-            </p>
-          </div>
-          <button
-            className="btn-secondary"
-            disabled={jobs.isFetching}
-            onClick={() => jobs.refetch()}
-          >
-            {jobs.isFetching ? "Retrying…" : "Retry"}
-          </button>
+        <div className="card flex items-center gap-3 border-rose-500/30 p-4 text-sm text-rose-400">
+          <AlertTriangle size={16} />
+          <span className="flex-1">Could not load jobs — {jobs.error.message}</span>
+          <button className="btn-secondary text-xs" onClick={() => jobs.refetch()}>Retry</button>
         </div>
-      ) : null}
-
-      {jobs.isLoading ? (
+      ) : jobs.isLoading ? (
         <div className="card flex items-center gap-2 p-6 text-sm text-slate-400">
-          <Loader2 size={16} className="animate-spin" /> Loading jobs…
+          <Loader2 size={15} className="animate-spin" /> Loading jobs…
         </div>
-      ) : jobs.isError && !jobs.data ? null : filtered.length === 0 ? (
+      ) : filtered.length === 0 ? (
         <div className="card flex flex-col items-center gap-3 p-10 text-center">
-          <div className="text-base font-semibold text-slate-200">
-            {totalCount === 0
-              ? "Your job list is empty"
+          <p className="text-base font-semibold text-slate-700 dark:text-slate-200">
+            {!hasSearched && totalCount === 0
+              ? "Ready to search"
+              : !hasSearched && totalCount > 0
+              ? "Ready to search"
+              : totalCount === 0
+              ? "No jobs yet"
               : "No jobs match these filters"}
-          </div>
-          <p className="max-w-md text-sm text-slate-400">
-            {totalCount === 0
-              ? "Search job boards above or paste a job description to add your first role."
-              : "Try another title, company, location, or status to find the roles you want."}
           </p>
-          {hasFilters ? (
-            <button className="btn-secondary" onClick={clearFilters}>
-              Clear filters
+          <p className="max-w-sm text-sm text-slate-500">
+            {!hasSearched && totalCount === 0
+              ? "Enter job titles above and click Search to get started."
+              : !hasSearched && totalCount > 0
+              ? "Enter job titles and filters above, then click Search to find matching roles."
+              : totalCount === 0
+              ? "Enter job titles above and hit Search to find roles."
+              : "Try a different title, company, or status filter."}
+          </p>
+          {hasFilters && <button className="btn-secondary text-sm" onClick={clearFilters}>Clear filters</button>}
+          {hasSearched && totalCount > 0 && filtered.length === 0 && (
+            <button className="btn-secondary text-sm" onClick={() => { setShowAllJobs(true); setFilter("all"); setQuery(""); }}>
+              Show all {totalCount} workspace jobs
             </button>
-          ) : null}
+          )}
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {filtered.map((job) => (
-            <JobCard
-              key={job.job_id}
-              job={job}
-              selected={selected.has(job.job_id)}
-              onToggle={(on) => toggleSelected(job.job_id, on)}
-            />
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {paginatedJobs.map((job) => (
+              <JobCard
+                key={job.job_id}
+                job={job}
+                selected={selected.has(job.job_id)}
+                onToggle={(on) => toggleSelected(job.job_id, on)}
+              />
+            ))}
+          </div>
+          
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between border-t border-slate-200 dark:border-slate-800 pt-4">
+              <p className="text-sm text-slate-500">
+                Page {currentPage} of {totalPages} · Showing {(currentPage - 1) * JOBS_PER_PAGE + 1}–{Math.min(currentPage * JOBS_PER_PAGE, filtered.length)} of {filtered.length}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                  className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-40"
+                >
+                  Previous
+                </button>
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  const page = currentPage <= 3 ? i + 1 : currentPage + i - 2;
+                  if (page > totalPages) return null;
+                  return (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={clsx(
+                        "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                        page === currentPage
+                          ? "bg-brand-500 text-white"
+                          : "bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-brand-500/20"
+                      )}
+                    >
+                      {page}
+                    </button>
+                  );
+                })}
+                <button
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                  className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       <TailorModal

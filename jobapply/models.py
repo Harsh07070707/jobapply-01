@@ -33,15 +33,16 @@ class JobSearchInput(BaseModel):
         description="JobSpy site_name list.",
     )
     linkedin_fetch_description: bool = Field(
-        True,
+        False,  # Changed to False by default for MUCH faster searches
         description=(
             "Make JobSpy fetch the full LinkedIn job description page for "
             "every hit. LinkedIn's search API only returns metadata; "
-            "without this flag the `description` field is blank, which "
-            "breaks downstream tailoring/scoring. Disable (slower → "
-            "faster) only if you're hitting LinkedIn rate limits."
+            "without this flag the `description` field is blank for LinkedIn jobs. "
+            "DISABLED by default for speed - only enable if you need LinkedIn descriptions."
         ),
     )
+    experience_level: str | None = Field(None, description="Filter by experience level")
+    job_type: str | list[str] | None = Field(None, description="Filter by job type (single or list)")
 
 
 class ApplicationHints(BaseModel):
@@ -316,6 +317,8 @@ class JobRecord(BaseModel):
     artifacts: JobArtifacts = Field(default_factory=JobArtifacts)
     error: str | None = None
     processed_at: datetime | None = None
+    has_referral: bool = False
+    referral_message: str | None = None
 
     def model_dump_for_json(self) -> dict[str, Any]:
         d = self.model_dump(mode="json")

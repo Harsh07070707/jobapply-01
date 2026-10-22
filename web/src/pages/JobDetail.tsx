@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import {
   ArrowLeft,
   Building2,
+  Download,
   ExternalLink,
   Loader2,
   Mail,
@@ -181,6 +182,16 @@ export default function JobDetail() {
             {j.fit.rationale}
           </p>
         ) : null}
+        {j.has_referral && j.referral_message ? (
+          <div className="rounded-lg bg-purple-500/10 border border-purple-500/30 p-3 space-y-2">
+            <div className="flex items-center gap-2 text-sm font-semibold text-purple-300">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+              Referral Program Detected
+            </div>
+            <p className="text-xs text-slate-400">This job mentions a referral program. Here's a template message you can use to reach out to employees:</p>
+            <pre className="text-xs text-slate-300 bg-slate-900/50 p-3 rounded border border-slate-700 whitespace-pre-wrap overflow-auto max-h-60">{j.referral_message}</pre>
+          </div>
+        ) : null}
         {j.fit?.missing_keywords && j.fit.missing_keywords.length > 0 ? (
           <p className="text-xs text-slate-500">
             <span className="text-slate-400">Missing keywords:</span>{" "}
@@ -206,6 +217,17 @@ export default function JobDetail() {
                 ? "Re-tailor"
                 : "Tailor resume + cover letter"}
           </button>
+          {isTailored && (
+            <a
+              href={`/api/jobs/${jobId}/download-package`}
+              download
+              className="btn-primary flex items-center gap-2"
+              title="Download resume PDF, cover letter PDF, and email template as ZIP"
+            >
+              <Download size={14} />
+              Download Package
+            </a>
+          )}
           <button
             className="btn-secondary"
             onClick={() => setEmailOpen(true)}

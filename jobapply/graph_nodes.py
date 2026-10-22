@@ -301,7 +301,9 @@ def process_one_node(state: GraphState) -> dict[str, Any]:
         md_cover = render_cover_markdown(cover)
         (job_dir / "resume.md").write_text(md_resume, encoding="utf-8")
         (job_dir / "cover_letter.md").write_text(md_cover, encoding="utf-8")
-        tex = fill_resume_tex(resume)
+        # Pass profile path for custom template if available
+        profile_path_obj = Path(prof_path_str) if prof_path_str else None
+        tex = fill_resume_tex(resume, profile_path=profile_path_obj)
         (job_dir / "resume.tex").write_text(tex, encoding="utf-8")
         cover_tex = fill_cover_letter_tex(
             cover,

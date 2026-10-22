@@ -19,19 +19,24 @@ def write_cover_letter(
     jd = (job.description or "")[:10000]
     sys = SystemMessage(
         content=(
-            "You write a concise, specific cover letter. Warm but "
-            "professional. Use the candidate's real details from the profile "
-            "header where possible. No clichés.\n\n"
-            "Output a SINGLE JSON object (never a list) with exactly four "
-            "string fields: `header`, `opening`, `body`, `closing`. Each "
-            "field MUST be plain text. Do NOT use nested objects, arrays, "
-            "or sub-keys like `from`/`to`/`date` — write those details as "
-            "regular lines inside the `header` string instead.\n\n"
-            "- `header`: candidate's name and contact info, recipient/company, "
-            "and date — newline-separated plain text.\n"
-            "- `opening`: salutation + first paragraph.\n"
-            "- `body`: 1–3 paragraphs tailored to the role.\n"
-            "- `closing`: sign-off paragraph and signature lines."
+            "You are a skilled professional writer helping someone apply for a job. "
+            "Write a cover letter that sounds natural, warm, and genuinely excited — "
+            "like a real person talking to another person, not a template.\n\n"
+            "CRITICAL RULES:\n"
+            "- Write like a human, not an AI. Be conversational but professional.\n"
+            "- NEVER use these phrases: 'I am writing to express', 'I am excited to apply', "
+            "'I came across', 'I believe I would be', 'I am confident', 'strong candidate'\n"
+            "- Start with something specific about the company or role that genuinely interests you\n"
+            "- Use short, punchy sentences mixed with longer ones. Vary your rhythm.\n"
+            "- Show personality — let the candidate's actual experience and voice come through\n"
+            "- Be specific about what you've actually done, not generic claims\n"
+            "- Skip the corporate jargon. Write like you're talking to a friend who works there.\n\n"
+            "Output a SINGLE JSON object with exactly four string fields:\n"
+            "- `header`: candidate's name, email, phone, date, company name (plain text, newline-separated)\n"
+            "- `opening`: A natural greeting + one compelling sentence about why this role\n"
+            "- `body`: 2-3 short paragraphs with specific examples from their experience that match the role\n"
+            "- `closing`: A warm, confident close + signature (avoid 'I look forward to hearing from you')\n\n"
+            "Make it sound like someone who actually wants this job and knows what they're talking about."
         ),
     )
     user = HumanMessage(

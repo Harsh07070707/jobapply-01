@@ -16,20 +16,25 @@ SPA's client-side router can handle it.
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from starlette.requests import Request
 
 from jobapply.agents.email_drafter import draft_application_email
 from jobapply.agents.fit_scorer import score_fit
 from jobapply.agents.search import iter_search_jobs
+from jobapply.auth.router import router as auth_router
 from jobapply.config import (
     DEFAULT_MODELS,
     PROVIDER_NAMES,
@@ -59,6 +64,7 @@ from jobapply.profile import (
     profile_skill_list,
     profile_to_text,
 )
+from jobapply.referral_detector import detect_referral, generate_referral_message
 from jobapply.tailor_one import (
     TailorEmailRequest,
     tailor_for_job_description,
@@ -84,8 +90,10 @@ class SearchRequest(BaseModel):
     score: bool = False
     provider: str | None = None
     model: str | None = None
-    linkedin_descriptions: bool = True
+    linkedin_descriptions: bool = False  # Changed to False for MUCH faster searches
     force: bool = False
+    experience_level: str | None = None
+    job_types: list[str] | None = None  # Changed to list for multi-select
 
 
 class RunRequest(BaseModel):
@@ -153,6 +161,11 @@ class StatusResponse(BaseModel):
     profile_path: str | None
     profile_loaded: bool
     profile_name: str
+    profile_email: str | None = None
+    profile_phone: str | None = None
+    profile_skills: list[str] = []
+    profile_linkedin: str | None = None
+    profile_github: str | None = None
     provider: str
     model: str
     sites: list[str]
@@ -242,12 +255,22 @@ def _record_from_raw_job(
     Typer / questionary at import time and would balloon FastAPI's
     cold-start cost).
     """
+    description = (job.description or "")[:5000]
+    has_referral = detect_referral(description)
+    referral_message = None
+    if has_referral:
+        referral_message = generate_referral_message(
+            job_title=job.title,
+            company=job.company,
+            candidate_name="[Your Name]",
+        )
+    
     return JobRecord(
         job_id=job.job_id,
         title=job.title,
         company=job.company,
         location=job.location,
-        description=(job.description or "")[:5000],
+        description=description,
         job_url=job.job_url,
         apply_url=job.apply_url,
         site=job.site,
@@ -256,6 +279,8 @@ def _record_from_raw_job(
         application=job.application,
         error=error,
         processed_at=datetime.now(UTC),
+        has_referral=has_referral,
+        referral_message=referral_message,
     )
 
 
@@ -398,6 +423,20 @@ def create_app(
     )
 
     app = FastAPI(title="JobApply", version="0.1.0")
+
+    # ------------------------------------------------------------------
+    # Rate limiting (slowapi)
+    # Disabled in test environments (TESTING=1) by using a very high
+    # per-key limit that tests will never reach.
+    # ------------------------------------------------------------------
+    _testing = os.environ.get("TESTING", "0") == "1"
+    limiter = Limiter(
+        key_func=get_remote_address,
+        default_limits=[] if not _testing else ["10000/minute"],
+    )
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
     if enable_cors:
         # The Vite dev server runs on :5173 and proxies /api → :8000.
         # Allowing localhost:* keeps that flow working without
@@ -413,6 +452,10 @@ def create_app(
             allow_headers=["*"],
         )
     app.state.ctx = ctx
+
+    # Auth routes (/api/auth/*) — registered before the existing routes
+    # so the prefix never clashes with workspace/job routes.
+    app.include_router(auth_router)
 
     _register_routes(app)
 
@@ -494,20 +537,36 @@ def _register_routes(app: FastAPI) -> None:
         prof_path = ctx.cwd / (cfg.profile_path or "profile.json")
         profile_loaded = prof_path.is_file()
         profile_name = ""
+        profile_email = None
+        profile_phone = None
+        profile_skills = []
+        profile_linkedin = None
+        profile_github = None
+        
         if profile_loaded:
             try:
-                profile_name = load_profile(prof_path).name
+                prof = load_profile(prof_path)
+                profile_name = prof.name
+                profile_email = prof.email or None
+                profile_phone = prof.phone or None
+                profile_skills = prof.skills[:20] if prof.skills else []
+                profile_linkedin = prof.linkedin or None
+                profile_github = prof.github or None
             except ProfileLoadError:
                 profile_loaded = False
-        web_dist = (
-            (Path(__file__).parent / WEB_DIST_DIRNAME / "index.html").is_file()
-        )
+        
+        web_dist = (Path(__file__).parent / WEB_DIST_DIRNAME / "index.html").is_file()
         return StatusResponse(
             workspace=str(ctx.workspace.path),
             workspace_total_jobs=ctx.workspace.count(),
             profile_path=str(prof_path) if profile_loaded else None,
             profile_loaded=profile_loaded,
             profile_name=profile_name,
+            profile_email=profile_email,
+            profile_phone=profile_phone,
+            profile_skills=profile_skills,
+            profile_linkedin=profile_linkedin,
+            profile_github=profile_github,
             provider=cfg.provider,
             model=cfg.resolved_model(cfg.provider),
             sites=list(cfg.sites),
@@ -527,6 +586,197 @@ def _register_routes(app: FastAPI) -> None:
             "path": str(path),
             "profile": profile_obj.model_dump(mode="json"),
         }
+
+    @app.post("/api/profile/upload")
+    async def upload_profile(request: Request) -> dict[str, Any]:
+        """Upload PDF/DOCX/TXT resume → extract text → write profile.json directly.
+        No LLM needed — parses the file locally and builds profile from the text.
+        """
+        import tempfile, shutil, re
+        from jobapply.profile_import import extract_text_from_resume, ResumeImportError
+        from jobapply.profile import save_profile, Profile
+        from jobapply.resume_template import extract_template_from_text, save_template_to_profile
+
+        ctx: ServerContext = request.app.state.ctx
+        cfg = ctx.cfg
+
+        form = await request.form()
+        file = form.get("resume")
+        if file is None or not getattr(file, "filename", None):
+            raise HTTPException(status_code=400, detail="No resume file received.")
+
+        filename = file.filename.lower()
+        if not any(filename.endswith(x) for x in (".pdf", ".docx", ".txt", ".md")):
+            raise HTTPException(status_code=400, detail="Only PDF, DOCX, TXT, and MD files are supported.")
+
+        suffix = "." + file.filename.rsplit(".", 1)[-1].lower()
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                shutil.copyfileobj(file.file, tmp)
+                tmp_path = Path(tmp.name)
+
+            try:
+                raw_text = extract_text_from_resume(tmp_path)
+            except ResumeImportError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+        finally:
+            if tmp_path:
+                tmp_path.unlink(missing_ok=True)
+
+        if not raw_text.strip():
+            raise HTTPException(status_code=422, detail="Could not extract text. Is it a scanned image PDF?")
+
+        # Extract resume template for format preservation
+        try:
+            template = extract_template_from_text(raw_text)
+        except Exception:
+            template = None  # Graceful fallback if template extraction fails
+
+        # ── Simple regex-based profile builder (no LLM, no rate limits) ──
+        lines = [l.strip() for l in raw_text.splitlines() if l.strip()]
+
+        # Name = first non-empty line
+        name = lines[0] if lines else "Unknown"
+
+        # Email
+        email_m = re.search(r"[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}", raw_text)
+        email = email_m.group(0) if email_m else ""
+
+        # Phone
+        phone_m = re.search(r"(\+?\d[\d\s\-().]{7,}\d)", raw_text)
+        phone = phone_m.group(0).strip() if phone_m else ""
+
+        # LinkedIn
+        li_m = re.search(r"linkedin\.com/in/[\w\-]+", raw_text)
+        linkedin = "https://" + li_m.group(0) if li_m else ""
+
+        # GitHub
+        gh_m = re.search(r"github\.com/[\w\-]+", raw_text)
+        github = "https://" + gh_m.group(0) if gh_m else ""
+
+        # Skills — look for skills section
+        skills: list[str] = []
+        skill_section = re.search(
+            r"(?:technical\s+skills?|skills?|technologies)[^\n]*\n(.*?)(?:\n\n|\Z)",
+            raw_text, re.IGNORECASE | re.DOTALL
+        )
+        if skill_section:
+            raw_skills = skill_section.group(1)
+            for chunk in re.split(r"[,|•\n]+", raw_skills):
+                chunk = re.sub(r"\s+", " ", chunk).strip()
+                if 2 < len(chunk) < 60 and not chunk.startswith("http"):
+                    skills.append(chunk)
+            skills = list(dict.fromkeys(skills))[:40]
+
+        # Summary
+        summary = ""
+        sum_m = re.search(
+            r"(?:summary|objective|profile)[^\n]*\n(.*?)(?:\n\n|\Z)",
+            raw_text, re.IGNORECASE | re.DOTALL
+        )
+        if sum_m:
+            summary = " ".join(sum_m.group(1).split())[:500]
+
+        # Experience - extract basic structure
+        from jobapply.models import ExperienceRole
+        experience_roles: list[ExperienceRole] = []
+        exp_section = re.search(
+            r"(?:experience|employment|work history)[^\n]*\n(.*?)(?:(?:projects?|education|certifications?|technical skills?)[^\n]*\n|\Z)",
+            raw_text, re.IGNORECASE | re.DOTALL
+        )
+        if exp_section:
+            exp_text = exp_section.group(1)
+            # Split by company/role patterns (company name followed by dates)
+            role_blocks = re.split(r"\n(?=[A-Z][^\n]{10,80}(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{4}))", exp_text)
+            for block in role_blocks[:5]:  # Limit to 5 most recent roles
+                lines = [l.strip() for l in block.split("\n") if l.strip()]
+                if len(lines) >= 2:
+                    company = lines[0].split("\t")[0].strip()
+                    role = lines[1] if len(lines) > 1 else "Role"
+                    bullets = [l for l in lines[2:] if l.startswith(("•", "-", "–")) or l[0].isupper()][:8]
+                    if company and len(company) < 100:
+                        experience_roles.append(ExperienceRole(
+                            company=company,
+                            role=role,
+                            dates="",
+                            location="",
+                            bullets=bullets or ["Details available in original resume"]
+                        ))
+
+        # Education - extract basic structure
+        from jobapply.models import EducationItem
+        education_items: list[EducationItem] = []
+        edu_section = re.search(
+            r"(?:education)[^\n]*\n(.*?)(?:(?:experience|projects?|certifications?|technical skills?)[^\n]*\n|\Z)",
+            raw_text, re.IGNORECASE | re.DOTALL
+        )
+        if edu_section:
+            edu_text = edu_section.group(1)
+            # Look for degree patterns
+            degree_pattern = r"(B\.?Tech|M\.?Tech|B\.?S\.?|M\.?S\.?|PhD|Bachelor|Master)[^\n]{0,100}"
+            degrees = re.findall(degree_pattern, edu_text, re.IGNORECASE)
+            if degrees:
+                # Find school name (usually first line or before degree)
+                lines = [l.strip() for l in edu_text.split("\n") if l.strip()]
+                school = lines[0] if lines else "University"
+                degree = degrees[0] if degrees else "Degree"
+                education_items.append(EducationItem(
+                    institution=school,
+                    degree=degree,
+                    dates="",
+                    location="",
+                    gpa="",
+                    coursework="",
+                    details=""
+                ))
+
+        # Build profile
+        profile_obj = Profile(
+            name=name,
+            email=email,
+            phone=phone,
+            linkedin=linkedin,
+            github=github,
+            summary=summary,
+            skills=skills,
+            experience=experience_roles,
+            projects=[],
+            education=education_items,
+        )
+
+        profile_path = ctx.cwd / (cfg.profile_path or "profile.json")
+        try:
+            save_profile(profile_obj, profile_path)
+            # Save extracted template for format preservation
+            if template:
+                save_template_to_profile(template, profile_path)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Could not write profile.json: {exc}")
+
+        return {
+            "status": "ok",
+            "profile_name": profile_obj.name,
+            "skills_count": len(profile_obj.skills),
+            "experience_count": len(profile_obj.experience),
+            "education_count": len(profile_obj.education),
+            "path": str(profile_path),
+            "note": "Profile created from resume. Experience and education extracted. Edit profile.json to refine details.",
+        }
+
+    @app.delete("/api/profile")
+    def delete_profile(request: Request) -> dict[str, str]:
+        """Delete profile.json from the workspace."""
+        ctx: ServerContext = request.app.state.ctx
+        cfg = ctx.cfg
+        profile_path = ctx.cwd / (cfg.profile_path or "profile.json")
+        if not profile_path.exists():
+            raise HTTPException(status_code=404, detail="No profile.json found")
+        try:
+            profile_path.unlink()
+            return {"status": "ok", "message": "Profile deleted"}
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Could not delete profile.json: {exc}")
 
     @app.get("/api/providers")
     def providers(request: Request) -> dict[str, Any]:
@@ -616,6 +866,75 @@ def _register_routes(app: FastAPI) -> None:
         if not path.is_file():
             raise HTTPException(status_code=404, detail=f"Artifact not found: {name}")
         return FileResponse(path)
+
+    @app.get("/api/jobs/{job_id}/download-package")
+    def download_package(job_id: str, request: Request):
+        """Create a ZIP containing resume PDF, cover letter PDF, and email template."""
+        import zipfile
+        import tempfile
+        ctx: ServerContext = request.app.state.ctx
+        ws = ctx.workspace
+        record = ws.get(job_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail=f"Unknown job: {job_id}")
+        
+        job_dir = _resolve_job_dir(ws, record)
+        
+        # Check what's available
+        resume_pdf = job_dir / "resume.pdf"
+        cover_pdf = job_dir / "cover_letter.pdf"
+        email_txt = job_dir / "email.txt"
+        
+        if not resume_pdf.exists() and not cover_pdf.exists():
+            raise HTTPException(
+                status_code=404, 
+                detail="No tailored materials found. Tailor this job first."
+            )
+        
+        # Create ZIP in memory
+        import io
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            if resume_pdf.exists():
+                zf.write(resume_pdf, f"resume_{job_id[:8]}.pdf")
+            if cover_pdf.exists():
+                zf.write(cover_pdf, f"cover_letter_{job_id[:8]}.pdf")
+            if email_txt.exists():
+                zf.write(email_txt, f"email_{job_id[:8]}.txt")
+            
+            # Add a README with application instructions
+            company = record.company or "Company"
+            title = record.title or "Position"
+            readme = f"""Application Package for {title} at {company}
+=================================================
+
+This package contains:
+- resume_{job_id[:8]}.pdf → Upload as your resume
+- cover_letter_{job_id[:8]}.pdf → Upload as cover letter
+- email_{job_id[:8]}.txt → Copy/paste for recruiter email
+
+Application URL: {record.apply_url or record.job_url or "See job board"}
+
+Instructions:
+1. Open the job application page
+2. Upload resume_{job_id[:8]}.pdf when asked for resume
+3. Upload cover_letter_{job_id[:8]}.pdf when asked for cover letter
+4. If emailing recruiter, copy/paste from email_{job_id[:8]}.txt
+
+Generated by JobApply
+"""
+            zf.writestr("README.txt", readme)
+        
+        zip_buffer.seek(0)
+        company_slug = (record.company or "job").replace(" ", "_").lower()[:20]
+        filename = f"jobapply_{company_slug}_{job_id[:8]}.zip"
+        
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(
+            io.BytesIO(zip_buffer.getvalue()),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
 
     # ------------------------------------------------------------------
     # Live LaTeX editing
@@ -760,6 +1079,72 @@ def _register_routes(app: FastAPI) -> None:
         ws.flush_files(run_id="delete", profile_path=str(ws.path))
         return {"deleted": job_id, "workspace_total_jobs": ws.count()}
 
+    @app.delete("/api/jobs")
+    def delete_all_jobs(request: Request) -> dict[str, Any]:
+        """Delete ALL jobs from workspace - clear everything."""
+        ctx: ServerContext = request.app.state.ctx
+        ws = ctx.workspace
+        
+        # Get all job IDs first (snapshot before deletion)
+        all_job_ids = [job.job_id for job in ws.all_records()]
+        print(f"[DELETE ALL] Starting deletion. Total jobs to delete: {len(all_job_ids)}")
+        print(f"[DELETE ALL] Job IDs: {all_job_ids[:5]}..." if len(all_job_ids) > 5 else f"[DELETE ALL] Job IDs: {all_job_ids}")
+        
+        deleted_count = 0
+        failed_count = 0
+        
+        # Delete each job one by one
+        for job_id in all_job_ids:
+            try:
+                record = ws.get(job_id)
+                if not record:
+                    print(f"[DELETE ALL] Job {job_id} not found in workspace.get()")
+                    failed_count += 1
+                    continue
+                    
+                # Delete files - best effort, don't fail if files missing
+                try:
+                    job_dir = _resolve_job_dir(ws, record)
+                    if job_dir.is_dir():
+                        import shutil
+                        shutil.rmtree(job_dir, ignore_errors=True)
+                        print(f"[DELETE ALL] Deleted directory for job {job_id}")
+                except Exception as e:
+                    print(f"[DELETE ALL] File deletion failed for {job_id}: {e}")
+                    pass  # Continue even if file deletion fails
+                
+                # Delete from database
+                from sqlmodel import Session, select
+                from jobapply.workspace import WorkspaceJobEntry
+                
+                with Session(ws._engine) as s:  # noqa: SLF001
+                    stmt = select(WorkspaceJobEntry).where(WorkspaceJobEntry.job_id == job_id)
+                    row = s.exec(stmt).first()
+                    if row is not None:
+                        s.delete(row)
+                        s.commit()
+                        deleted_count += 1
+                        print(f"[DELETE ALL] DB delete successful for job {job_id}")
+                    else:
+                        print(f"[DELETE ALL] No DB row found for job {job_id}")
+                        failed_count += 1
+            except Exception as e:
+                # Continue with next job even if one fails
+                print(f"[DELETE ALL] Exception deleting job {job_id}: {e}")
+                failed_count += 1
+                continue
+        
+        ws.flush_files(run_id="clear_all", profile_path=str(ws.path))
+        
+        final_count = ws.count()
+        print(f"[DELETE ALL] Completed. Deleted: {deleted_count}, Failed: {failed_count}, Remaining: {final_count}")
+        
+        return {
+            "deleted_count": deleted_count,
+            "failed_count": failed_count,
+            "workspace_total_jobs": final_count
+        }
+
     @app.get("/api/searches")
     def list_searches(request: Request, limit: int = 25) -> dict[str, Any]:
         ctx: ServerContext = request.app.state.ctx
@@ -785,6 +1170,34 @@ def _register_routes(app: FastAPI) -> None:
                 for r in rows
             ],
         }
+
+    @app.delete("/api/searches/{search_id}")
+    def delete_search(search_id: int, request: Request) -> dict[str, Any]:
+        """Delete a single search history entry by id."""
+        ctx: ServerContext = request.app.state.ctx
+        from sqlmodel import Session
+        from jobapply.workspace import WorkspaceSearchEntry
+        with Session(ctx.workspace._engine) as s:
+            row = s.get(WorkspaceSearchEntry, search_id)
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"Search {search_id} not found.")
+            s.delete(row)
+            s.commit()
+        return {"deleted": search_id}
+
+    @app.delete("/api/searches")
+    def delete_all_searches(request: Request) -> dict[str, Any]:
+        """Delete all search history entries."""
+        ctx: ServerContext = request.app.state.ctx
+        from sqlmodel import Session, select
+        from jobapply.workspace import WorkspaceSearchEntry
+        with Session(ctx.workspace._engine) as s:
+            rows = s.exec(select(WorkspaceSearchEntry)).all()
+            count = len(rows)
+            for row in rows:
+                s.delete(row)
+            s.commit()
+        return {"deleted_count": count}
 
     # --------- task endpoints ----------
 
@@ -823,6 +1236,7 @@ def _register_routes(app: FastAPI) -> None:
 
         site_list = payload.sites or list(cfg.sites)
         results_wanted = payload.results_wanted or cfg.results_wanted
+        
         search_input = JobSearchInput(
             titles=payload.titles,
             skills=payload.skills,
@@ -832,6 +1246,8 @@ def _register_routes(app: FastAPI) -> None:
             hours_old=cfg.hours_old,
             site_names=site_list,
             linkedin_fetch_description=payload.linkedin_descriptions,
+            experience_level=payload.experience_level,
+            job_type=payload.job_types if payload.job_types else None,  # Pass list directly
         )
 
         prov = ""
@@ -860,38 +1276,54 @@ def _register_routes(app: FastAPI) -> None:
             llm = None
             if payload.score:
                 llm = create_chat_model(prov, mdl, cfg=cfg)
+            
+            # Batch jobs for faster processing
+            jobs_batch = []
+            
             try:
                 for raw in iter_search_jobs(search_input):
                     if handle.is_cancelled():
                         handle.log("Cancelled by user.")
                         break
                     fetched += 1
-                    record = _record_from_raw_job(raw)
+                    
+                    # Check if duplicate first (fast check)
                     if ws.is_seen(raw.job_id) and not payload.force:
                         duplicate_count += 1
                         handle.log(f"dup: {raw.title} @ {raw.company}")
+                        handle.set_label(
+                            f"Searching… {fetched} fetched ({new_count} new, "
+                            f"{duplicate_count} duplicate)"
+                        )
+                        handle.set_percent(min(95.0, 5.0 + fetched * 1.0))
+                        continue
+                    
+                    # Process job (score if needed)
+                    record = _record_from_raw_job(raw)
+                    if payload.score and llm is not None:
+                        try:
+                            fit = score_fit(
+                                llm,
+                                profile_text=profile_text,
+                                job=raw,
+                                skills=skill_list,
+                            )
+                            record = _record_from_raw_job(raw, fit=fit)
+                        except Exception as exc:  # noqa: BLE001
+                            record = _record_from_raw_job(
+                                raw, error=f"score failed: {exc}"
+                            )
+                    
+                    # Insert to database
+                    inserted = ws.upsert_job(record, search_id=search_id)
+                    if inserted:
+                        new_count += 1
+                        handle.log(f"new: {raw.title} @ {raw.company}")
                     else:
-                        if payload.score and llm is not None:
-                            try:
-                                fit = score_fit(
-                                    llm,
-                                    profile_text=profile_text,
-                                    job=raw,
-                                    skills=skill_list,
-                                )
-                                record = _record_from_raw_job(raw, fit=fit)
-                            except Exception as exc:  # noqa: BLE001
-                                record = _record_from_raw_job(
-                                    raw, error=f"score failed: {exc}"
-                                )
-                        inserted = ws.upsert_job(record, search_id=search_id)
-                        if inserted:
-                            new_count += 1
-                            handle.log(f"new: {raw.title} @ {raw.company}")
-                        else:
-                            duplicate_count += 1
-                            handle.log(f"refresh: {raw.title} @ {raw.company}")
-                        _persist_job_dir(ws, record)
+                        duplicate_count += 1
+                        handle.log(f"refresh: {raw.title} @ {raw.company}")
+                    _persist_job_dir(ws, record)
+                    
                     handle.set_label(
                         f"Searching… {fetched} fetched ({new_count} new, "
                         f"{duplicate_count} duplicate)"

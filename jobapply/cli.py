@@ -2143,6 +2143,7 @@ def tailor(
             no_pdf=no_pdf,
             email=email_request,
             profile=profile,
+            profile_path=prof,
         )
     except JobDescriptionReadError as exc:
         console.print(f"[red]Job description error:[/red] {exc}")
