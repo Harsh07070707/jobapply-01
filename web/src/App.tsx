@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react";
 import { Route, Routes } from "react-router-dom";
 
 import { AuthProvider } from "@/lib/auth";
+import { SearchStateProvider } from "@/lib/SearchStateContext";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import Layout from "@/components/Layout";
 
@@ -34,39 +35,41 @@ function EditorFallback() {
 export default function App() {
   return (
     <AuthProvider>
-      <Routes>
-        {/* ── Public auth routes (no Layout shell) ─────────────────── */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-        <Route path="/verify-email" element={<VerifyEmail />} />
+      <SearchStateProvider>
+        <Routes>
+          {/* ── Public auth routes (no Layout shell) ─────────────────── */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
 
-        {/* ── Protected routes (require login) ─────────────────────── */}
-        <Route
-          element={
-            <ProtectedRoute>
-              <Layout />
-            </ProtectedRoute>
-          }
-        >
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/jobs/:jobId" element={<JobDetail />} />
+          {/* ── Protected routes (require login) ─────────────────────── */}
           <Route
-            path="/jobs/:jobId/edit/:name"
             element={
-              <Suspense fallback={<EditorFallback />}>
-                <ArtifactEditor />
-              </Suspense>
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
             }
-          />
-          <Route path="/freeform" element={<Freeform />} />
-          <Route path="/searches" element={<Searches />} />
-        </Route>
+          >
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/jobs/:jobId" element={<JobDetail />} />
+            <Route
+              path="/jobs/:jobId/edit/:name"
+              element={
+                <Suspense fallback={<EditorFallback />}>
+                  <ArtifactEditor />
+                </Suspense>
+              }
+            />
+            <Route path="/freeform" element={<Freeform />} />
+            <Route path="/searches" element={<Searches />} />
+          </Route>
 
-        {/* ── 404 ──────────────────────────────────────────────────── */}
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+          {/* ── 404 ──────────────────────────────────────────────────── */}
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </SearchStateProvider>
     </AuthProvider>
   );
 }

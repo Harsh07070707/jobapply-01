@@ -45,48 +45,50 @@ const JOB_TYPES = [
   { value: "internship_type", label: "Internship" },
 ];
 
+// Save form state to localStorage (not sessionStorage) so it persists across tabs AND sessions
+function saveFormState(state: any) {
+  try {
+    localStorage.setItem("search_form_state", JSON.stringify(state));
+  } catch (e) {
+    console.error("Failed to save form state:", e);
+  }
+}
+
+function loadFormState() {
+  try {
+    const saved = localStorage.getItem("search_form_state");
+    return saved ? JSON.parse(saved) : null;
+  } catch (e) {
+    console.error("Failed to load form state:", e);
+    return null;
+  }
+}
+
 export default function SearchForm({ onTaskStarted }: Props) {
   const status = useStatus();
-  const [titles, setTitles] = useState("");
-  const [skills, setSkills] = useState("");
-  const [locations, setLocations] = useState<string[]>([]);
+  
+  // Load initial state from localStorage
+  const savedState = loadFormState();
+  
+  const [titles, setTitles] = useState(savedState?.titles || "");
+  const [skills, setSkills] = useState(savedState?.skills || "");
+  const [locations, setLocations] = useState<string[]>(savedState?.locations || []);
   const [locInput, setLocInput] = useState("");
   const [showLocSuggestions, setShowLocSuggestions] = useState(false);
-  const [results, setResults] = useState<number | "">("");
-  const [expLevel, setExpLevel] = useState("");
-  const [jobTypes, setJobTypes] = useState<string[]>([]); // Changed to array for multi-select
-  const [score, setScore] = useState(false);
-  const [remote, setRemote] = useState(false);
-  const [linkedin, setLinkedin] = useState(false); // Changed to FALSE for faster searches
+  const [results, setResults] = useState<number | "">(savedState?.results || "");
+  const [expLevel, setExpLevel] = useState(savedState?.expLevel || "");
+  const [jobTypes, setJobTypes] = useState<string[]>(savedState?.jobTypes || []);
+  const [score, setScore] = useState(savedState?.score || false);
+  const [remote, setRemote] = useState(savedState?.remote || false);
+  const [linkedin, setLinkedin] = useState(savedState?.linkedin !== undefined ? savedState.linkedin : false);
   const [force, setForce] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const locRef = useRef<HTMLDivElement>(null);
   const start = useStartSearch();
 
-  // Restore search from history if present
+  // Save form state to localStorage whenever it changes
   useEffect(() => {
-    const restored = sessionStorage.getItem("restore_search");
-    if (restored) {
-      try {
-        const params = JSON.parse(restored);
-        if (params.titles) setTitles(params.titles.join(", "));
-        if (params.skills) setSkills(params.skills.join(", "));
-        if (params.location) setLocations([params.location]);
-        if (params.results_wanted) setResults(params.results_wanted);
-        if (params.experience_level) setExpLevel(params.experience_level);
-        if (params.job_types) setJobTypes(params.job_types); // Changed from job_type
-        if (params.remote !== undefined) setRemote(params.remote);
-        if (params.linkedin_fetch_description !== undefined) setLinkedin(params.linkedin_fetch_description);
-        sessionStorage.removeItem("restore_search"); // Clear after restore
-      } catch (e) {
-        console.error("Failed to restore search:", e);
-      }
-    }
-  }, []);
-
-  // Save form state to sessionStorage whenever it changes
-  useEffect(() => {
-    const formState = {
+    saveFormState({
       titles,
       skills,
       locations,
@@ -96,30 +98,8 @@ export default function SearchForm({ onTaskStarted }: Props) {
       score,
       remote,
       linkedin,
-    };
-    sessionStorage.setItem("search_form_state", JSON.stringify(formState));
+    });
   }, [titles, skills, locations, results, expLevel, jobTypes, score, remote, linkedin]);
-
-  // Restore form state on mount
-  useEffect(() => {
-    const savedState = sessionStorage.getItem("search_form_state");
-    if (savedState) {
-      try {
-        const state = JSON.parse(savedState);
-        if (state.titles) setTitles(state.titles);
-        if (state.skills) setSkills(state.skills);
-        if (state.locations) setLocations(state.locations);
-        if (state.results) setResults(state.results);
-        if (state.expLevel) setExpLevel(state.expLevel);
-        if (state.jobTypes) setJobTypes(state.jobTypes);
-        if (state.score !== undefined) setScore(state.score);
-        if (state.remote !== undefined) setRemote(state.remote);
-        if (state.linkedin !== undefined) setLinkedin(state.linkedin);
-      } catch (e) {
-        console.error("Failed to restore form state:", e);
-      }
-    }
-  }, []);
 
   // Toggle job type selection
   function toggleJobType(value: string) {
@@ -163,10 +143,10 @@ export default function SearchForm({ onTaskStarted }: Props) {
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const titleList = titles.split(",").map((t) => t.trim()).filter(Boolean);
+    const titleList = titles.split(",").map((t: string) => t.trim()).filter(Boolean);
     if (!titleList.length) return;
 
-    const skillsList = skills.split(",").map((t) => t.trim()).filter(Boolean);
+    const skillsList = skills.split(",").map((t: string) => t.trim()).filter(Boolean);
 
     const locationTargets = locations.length > 0 ? locations : [undefined as unknown as string];
     const resultsNum = typeof results === "number" ? results : (status.data?.results_wanted ?? 30);
@@ -189,7 +169,7 @@ export default function SearchForm({ onTaskStarted }: Props) {
           linkedin_descriptions: linkedin,
           force,
           experience_level: expLevel || undefined,
-          job_types: jobTypes.length > 0 ? jobTypes : undefined, // Send array instead of single value
+          job_type: jobTypes.length > 0 ? jobTypes.join(",") : undefined, // Send comma-separated string
         });
         if (!firstTask) { firstTask = task; onTaskStarted(task); }
       }

@@ -10,6 +10,7 @@ import ProfileManager from "@/components/ProfileManager";
 import TailorModal, { type TailorOptions } from "@/components/TailorModal";
 import TaskProgress from "@/components/TaskProgress";
 import { useJobs, useStartRun, useStatus } from "@/lib/hooks";
+import { useSearchState } from "@/lib/SearchStateContext";
 import type { JobRecord, TaskRecord } from "@/lib/types";
 import { api } from "@/lib/api";
 import clsx from "clsx";
@@ -22,92 +23,40 @@ const STATUS_FILTERS = [
   { value: "failed",  label: "Failed" },
 ];
 
-type SortOrder = "fit" | "title" | "workspace";
-
 export default function Dashboard() {
   const status   = useStatus();
   const jobs     = useJobs();
   const startRun = useStartRun();
+  
+  // Use global search state context
+  const {
+    state: {
+      lastSearchJobIds,
+      showAllJobs,
+      hasSearched,
+      filter,
+      query,
+      sort,
+      currentPage,
+    },
+    setLastSearchJobIds,
+    setShowAllJobs,
+    setHasSearched,
+    setFilter,
+    setQuery,
+    setSort,
+    setCurrentPage,
+    clearAllState,
+  } = useSearchState();
 
-  const [filter,      setFilter]     = useState<string>(() => {
-    const saved = sessionStorage.getItem("dashboard_filter");
-    return saved || "all";
-  });
-  const [query,       setQuery]      = useState(() => {
-    const saved = sessionStorage.getItem("dashboard_query");
-    return saved || "";
-  });
-  const [sort,        setSort]       = useState<SortOrder>(() => {
-    const saved = sessionStorage.getItem("dashboard_sort");
-    return (saved as SortOrder) || "fit";
-  });
   const [selected,    setSelected]   = useState<Set<string>>(new Set());
   const [searchTask,  setSearchTask] = useState<TaskRecord | null>(null);
   const [runTask,     setRunTask]    = useState<TaskRecord | null>(null);
   const [tailorOpen,  setTailorOpen] = useState(false);
   const [showUpload,  setShowUpload] = useState(false);
   const [searching,   setSearching]  = useState(false);
-  // Initialize state from sessionStorage - runs on EVERY mount (including after back navigation)
-  const [lastSearchJobIds, setLastSearchJobIds] = useState<string[] | null>(() => {
-    const saved = sessionStorage.getItem("dashboard_lastSearchJobIds");
-    console.log("[Dashboard Init] lastSearchJobIds from storage:", saved);
-    return saved ? JSON.parse(saved) : null;
-  });
-  const [showAllJobs, setShowAllJobs] = useState(() => {
-    const saved = sessionStorage.getItem("dashboard_showAllJobs");
-    console.log("[Dashboard Init] showAllJobs from storage:", saved);
-    return saved ? JSON.parse(saved) : false;
-  });
-  const [hasSearched, setHasSearched] = useState(() => {
-    const saved = sessionStorage.getItem("dashboard_hasSearched");
-    console.log("[Dashboard Init] hasSearched from storage:", saved);
-    return saved ? JSON.parse(saved) : false;
-  });
-  const [currentPage, setCurrentPage] = useState(() => {
-    const saved = sessionStorage.getItem("dashboard_currentPage");
-    console.log("[Dashboard Init] currentPage from storage:", saved);
-    return saved ? parseInt(saved, 10) : 1;
-  });
   const [confirmClearAll, setConfirmClearAll] = useState(false);
   const JOBS_PER_PAGE = 20;
-
-  // Persist dashboard state to sessionStorage
-  useEffect(() => {
-    console.log("[Dashboard] Persisting filter:", filter);
-    sessionStorage.setItem("dashboard_filter", filter);
-  }, [filter]);
-
-  useEffect(() => {
-    console.log("[Dashboard] Persisting query:", query);
-    sessionStorage.setItem("dashboard_query", query);
-  }, [query]);
-
-  useEffect(() => {
-    console.log("[Dashboard] Persisting sort:", sort);
-    sessionStorage.setItem("dashboard_sort", sort);
-  }, [sort]);
-
-  useEffect(() => {
-    console.log("[Dashboard] Persisting currentPage:", currentPage);
-    sessionStorage.setItem("dashboard_currentPage", String(currentPage));
-  }, [currentPage]);
-
-  useEffect(() => {
-    if (lastSearchJobIds) {
-      console.log("[Dashboard] Persisting lastSearchJobIds:", lastSearchJobIds.length, "jobs");
-      sessionStorage.setItem("dashboard_lastSearchJobIds", JSON.stringify(lastSearchJobIds));
-    }
-  }, [lastSearchJobIds]);
-
-  useEffect(() => {
-    console.log("[Dashboard] Persisting showAllJobs:", showAllJobs);
-    sessionStorage.setItem("dashboard_showAllJobs", JSON.stringify(showAllJobs));
-  }, [showAllJobs]);
-
-  useEffect(() => {
-    console.log("[Dashboard] Persisting hasSearched:", hasSearched);
-    sessionStorage.setItem("dashboard_hasSearched", JSON.stringify(hasSearched));
-  }, [hasSearched]);
 
   const resultsRef = useRef<HTMLDivElement>(null);
   const profileLoaded = status.data?.profile_loaded ?? false;
@@ -115,13 +64,9 @@ export default function Dashboard() {
   /* ── derived lists ─────────────────────────────────────────────── */
   const filtered: JobRecord[] = useMemo(() => {
     const allJobs = jobs.data?.jobs ?? [];
-    console.log("[Dashboard Filter] Total jobs in workspace:", allJobs.length);
-    console.log("[Dashboard Filter] hasSearched:", hasSearched, "showAllJobs:", showAllJobs);
-    console.log("[Dashboard Filter] lastSearchJobIds:", lastSearchJobIds?.length || "null");
     
     // If user hasn't searched yet AND showAllJobs is false, show nothing
     if (!hasSearched && !showAllJobs) {
-      console.log("[Dashboard Filter] No search yet, showing empty");
       return [];
     }
     
@@ -129,8 +74,6 @@ export default function Dashboard() {
     const list = (lastSearchJobIds && !showAllJobs)
       ? allJobs.filter((j) => lastSearchJobIds.includes(j.job_id))
       : allJobs;
-    
-    console.log("[Dashboard Filter] After search filter:", list.length, "jobs");
     
     const q = query.trim().toLowerCase();
     const out = list.filter((j) => {
@@ -145,8 +88,6 @@ export default function Dashboard() {
     });
     if (sort === "fit")   out.sort((a, b) => (b.fit?.score ?? -1) - (a.fit?.score ?? -1));
     if (sort === "title") out.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-    
-    console.log("[Dashboard Filter] Final filtered:", out.length, "jobs");
     return out;
   }, [jobs.data, filter, query, sort, lastSearchJobIds, showAllJobs, hasSearched]);
 
@@ -209,26 +150,19 @@ export default function Dashboard() {
 
   /* ── search finished ───────────────────────────────────────────── */
   async function handleSearchDone() {
-    console.log("[Search Done] Starting...");
     setSearching(false);
     const { data } = await jobs.refetch();
     
     // Get ONLY the jobs from THIS search (most recent by processed_at)
-    // This ensures we show EXACTLY the results from this search
     const allJobs = data?.jobs ?? [];
-    
-    // Get the most recent timestamp before this search started
     const searchStartTime = searchTask?.created_at ?? "";
-    
-    // Filter jobs that were processed during or after this search
     const freshJobs = allJobs.filter((j) => 
       (j.processed_at || "") >= searchStartTime
     );
     
     const jobIds = freshJobs.map((j) => j.job_id);
-    console.log("[Search Done] Setting lastSearchJobIds:", jobIds.length, "jobs");
     setLastSearchJobIds(jobIds);
-    setShowAllJobs(false); // Keep showing only search results
+    setShowAllJobs(false);
   }
 
   /* ── tailor ─────────────────────────────────────────────────────── */
@@ -252,30 +186,16 @@ export default function Dashboard() {
   const handleClearAll = async () => {
     try {
       const result = await api.deleteAllJobs();
-      console.log("[Clear Workspace] Delete result:", result);
       
       if (result.deleted_count === 0) {
-        alert(`Warning: No jobs were deleted. Failed: ${result.failed_count || 0}. Check server logs.`);
+        alert("Warning: No jobs were deleted. Check server logs.");
         return;
-      } else if (result.failed_count && result.failed_count > 0) {
-        alert(`Deleted ${result.deleted_count} jobs, but ${result.failed_count} failed. Check server logs.`);
       }
       
-      // Clear all state
+      // Clear all state using context
       setConfirmClearAll(false);
-      setLastSearchJobIds(null);
-      setHasSearched(false);
-      setShowAllJobs(false);
       setSelected(new Set());
-      setFilter("all");
-      setQuery("");
-      
-      // Clear sessionStorage
-      sessionStorage.removeItem("dashboard_lastSearchJobIds");
-      sessionStorage.removeItem("dashboard_hasSearched");
-      sessionStorage.removeItem("dashboard_showAllJobs");
-      sessionStorage.removeItem("dashboard_filter");
-      sessionStorage.removeItem("dashboard_query");
+      clearAllState(); // Clear context state
       
       // Force refetch and wait for it
       await jobs.refetch();
@@ -490,7 +410,7 @@ export default function Dashboard() {
             <select
               className="input w-auto text-xs py-1"
               value={sort}
-              onChange={(e) => setSort(e.target.value as SortOrder)}
+              onChange={(e) => setSort(e.target.value as "fit" | "title" | "workspace")}
             >
               <option value="fit">Highest fit</option>
               <option value="title">Title A–Z</option>
@@ -572,7 +492,7 @@ export default function Dashboard() {
               </p>
               <div className="flex gap-2">
                 <button
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
                   disabled={currentPage === 1}
                   className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-40"
                 >
@@ -597,7 +517,7 @@ export default function Dashboard() {
                   );
                 })}
                 <button
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
                   disabled={currentPage === totalPages}
                   className="btn-secondary text-xs px-3 py-1.5 disabled:opacity-40"
                 >
