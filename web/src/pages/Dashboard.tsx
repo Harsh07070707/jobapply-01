@@ -234,16 +234,32 @@ export default function Dashboard() {
       
       if (result.deleted_count === 0) {
         alert(`Warning: No jobs were deleted. Failed: ${result.failed_count || 0}. Check server logs.`);
+        return;
       } else if (result.failed_count && result.failed_count > 0) {
         alert(`Deleted ${result.deleted_count} jobs, but ${result.failed_count} failed. Check server logs.`);
       }
       
+      // Clear all state
       setConfirmClearAll(false);
       setLastSearchJobIds(null);
       setHasSearched(false);
       setShowAllJobs(false);
       setSelected(new Set());
-      jobs.refetch();
+      setFilter("all");
+      setQuery("");
+      
+      // Clear sessionStorage
+      sessionStorage.removeItem("dashboard_lastSearchJobIds");
+      sessionStorage.removeItem("dashboard_hasSearched");
+      sessionStorage.removeItem("dashboard_showAllJobs");
+      sessionStorage.removeItem("dashboard_filter");
+      sessionStorage.removeItem("dashboard_query");
+      
+      // Force refetch and wait for it
+      await jobs.refetch();
+      
+      // Show success message
+      alert(`Successfully deleted ${result.deleted_count} jobs!`);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to clear workspace");
     }

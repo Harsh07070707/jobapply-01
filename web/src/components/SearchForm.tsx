@@ -337,16 +337,16 @@ export default function SearchForm({ onTaskStarted }: Props) {
       {/* Quick toggles */}
       <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-slate-600 dark:text-slate-300">
         <label className="flex items-center gap-2">
-          <input type="checkbox" checked={score} onChange={(e) => setScore(e.target.checked)} className="accent-brand-500" />
-          Score against profile
-        </label>
-        <label className="flex items-center gap-2">
           <input type="checkbox" checked={remote} onChange={(e) => setRemote(e.target.checked)} className="accent-brand-500" />
           Remote-friendly only
         </label>
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={linkedin} onChange={(e) => setLinkedin(e.target.checked)} className="accent-brand-500" />
-          Fetch LinkedIn descriptions (slower)
+          Fetch LinkedIn descriptions (much slower)
+        </label>
+        <label className="flex items-center gap-2 text-slate-400">
+          <input type="checkbox" checked={score} onChange={(e) => setScore(e.target.checked)} className="accent-brand-500" />
+          Score against profile (slower, AI scoring)
         </label>
       </div>
 

@@ -50,6 +50,10 @@ export function useJobs(opts?: Partial<UseQueryOptions<JobsListResponse>>) {
   return useQuery({
     queryKey: queryKeys.jobs,
     queryFn: api.jobs,
+    staleTime: 5 * 60 * 1000, // Consider data fresh for 5 minutes
+    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes (was cacheTime in v4)
+    refetchOnMount: false, // Don't refetch on component mount
+    refetchOnWindowFocus: false, // Don't refetch when window regains focus
     ...opts,
   });
 }
